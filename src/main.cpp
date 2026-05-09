@@ -67,29 +67,89 @@ static void startAudio() {
 }
 
 static void render() {
-    int w, h;
+    int w = 800, h = 600;
     SDL_GetRendererOutputSize(renderer, &w, &h);
-    
-    float b = 0;
-    if (g_running && !g_timeline.brightness.empty()) {
-        int f = (int)(g_time * g_timeline.fps);
-        if (f >= 0 && f < (int)g_timeline.brightness.size()) {
-            b = g_timeline.brightness[f];
-        }
+    if (w <= 0 || h <= 0) {
+        SDL_GetWindowSize(window, &w, &h);
     }
-    
-    // Brightness from black to white based on music energy
-    Uint8 v = (Uint8)(b * 255);
-    SDL_SetRenderDrawColor(renderer, v, v, v, 255);
+    if (w <= 0 || h <= 0) {
+        w = 800; h = 600;
+    }
+
+    // Dark background
+    SDL_SetRenderDrawColor(renderer, 18, 18, 24, 255);
     SDL_RenderClear(renderer);
-    
-    // Optional: subtle tint - warm when bright, cool when dark
-    if (b > 0.3f) {
-        int tint = (int)((b - 0.3f) * 60);
-        SDL_SetRenderDrawColor(renderer, v, v - tint/3, v - tint/2, 255);
-        SDL_RenderClear(renderer);
+
+    // Debug: always draw a visible red square in corner
+    SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
+    SDL_Rect debugRect = {10, 10, 50, 50};
+    SDL_RenderFillRect(renderer, &debugRect);
+
+    // Progress bar sizing - responsive but capped
+    int barW = w - 80;
+    if (barW > 900) barW = 900;
+    if (barW < 200) barW = 200;
+    int barH = h / 15;
+    if (barH < 30) barH = 30;
+    if (barH > 60) barH = 60;
+    int barX = (w - barW) / 2;
+    int barY = (h - barH) / 2;
+    const float WINDOW_SECONDS = 10.0f;
+    const float PLAYHEAD_RATIO = 0.25f;
+
+    float totalDuration = g_timeline.brightness.empty() ? 0.0f : g_timeline.brightness.size() / g_timeline.fps;
+    float currentTime = g_running ? g_time : 0.0f;
+
+    // Draw bar background (dark gray)
+    SDL_SetRenderDrawColor(renderer, 45, 45, 55, 255);
+    SDL_Rect bgRect = {barX, barY, barW, barH};
+    SDL_RenderFillRect(renderer, &bgRect);
+
+    // Draw border
+    SDL_SetRenderDrawColor(renderer, 100, 100, 120, 255);
+    SDL_RenderDrawRect(renderer, &bgRect);
+
+    // Draw waveform / brightness bars
+    if (!g_timeline.brightness.empty()) {
+        // Calculate 10-second sliding window
+        float windowStart, windowEnd;
+        if (currentTime < WINDOW_SECONDS * PLAYHEAD_RATIO) {
+            windowStart = 0;
+            windowEnd = WINDOW_SECONDS;
+        } else if (currentTime > totalDuration - WINDOW_SECONDS * (1.0f - PLAYHEAD_RATIO)) {
+            windowEnd = totalDuration;
+            windowStart = totalDuration - WINDOW_SECONDS;
+        } else {
+            windowStart = currentTime - WINDOW_SECONDS * PLAYHEAD_RATIO;
+            windowEnd = currentTime + WINDOW_SECONDS * (1.0f - PLAYHEAD_RATIO);
+        }
+
+        int numFrames = g_timeline.brightness.size();
+        for (int px = 0; px < barW; px++) {
+            float t = windowStart + (px / (float)barW) * WINDOW_SECONDS;
+            int frameIdx = (int)(t * g_timeline.fps);
+            if (frameIdx < 0 || frameIdx >= numFrames) continue;
+
+            float b = g_timeline.brightness[frameIdx];
+            int lineH = (int)(b * (barH - 6));
+            if (lineH < 2) lineH = 2;
+            int lineY = barY + (barH - lineH) / 2;
+            int x = barX + px;
+
+            Uint8 intensity = (Uint8)(80 + b * 175);
+            SDL_SetRenderDrawColor(renderer, 0, intensity, 255, 255);
+            SDL_RenderDrawLine(renderer, x, lineY + lineH, x, lineY);
+        }
+
+        // Draw playhead (bright white vertical line)
+        float playheadT = (currentTime - windowStart) / WINDOW_SECONDS;
+        int playheadX = barX + (int)(playheadT * barW);
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        SDL_RenderDrawLine(renderer, playheadX, barY - 6, playheadX, barY + barH + 6);
+        SDL_RenderDrawLine(renderer, playheadX - 4, barY - 6, playheadX + 4, barY - 6);
+        SDL_RenderDrawLine(renderer, playheadX - 4, barY + barH + 6, playheadX + 4, barY + barH + 6);
     }
-    
+
     SDL_RenderPresent(renderer);
 }
 
@@ -130,7 +190,7 @@ static void mainLoop() {
 int main(int argc, char* argv[]) {
     printf("Audio Visualizer\n");
     
-    const char* path = "audio/test.mp3";
+    const char* path = "audio/test-1.mp3";
     if (argc > 1) path = argv[1];
     
     auto mp3 = loadFile(path);
@@ -168,10 +228,17 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
+#ifdef __EMSCRIPTEN__
+    window = SDL_CreateWindow("Visualizer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 0, 0, SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE);
+#else
     window = SDL_CreateWindow("Visualizer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 800, 600, SDL_WINDOW_RESIZABLE);
+#endif
     if (!window) { SDL_Quit(); return 1; }
     
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!renderer) {
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    }
     if (!renderer) { SDL_DestroyWindow(window); SDL_Quit(); return 1; }
     
     if (g_audio.samples && g_audio.totalSamples > 0) {
