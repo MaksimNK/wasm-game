@@ -17,8 +17,10 @@ struct AudioState {
     int currentSample;
     bool started;
     int sampleRate;
+    Uint32 lastCallbackTime;  // SDL_GetTicks() at last callback
+    int lastCallbackSample;    // currentSample at last callback
 };
-static AudioState g_audio = {nullptr, 0, 0, false, 44100};
+static AudioState g_audio = {nullptr, 0, 0, false, 44100, 0, 0};
 static std::vector<float> g_audioSamples; // Keeps samples alive
 
 void audioCallback(void*, Uint8* stream, int len) {
@@ -32,6 +34,8 @@ void audioCallback(void*, Uint8* stream, int len) {
     memcpy(stream, &g_audio.samples[g_audio.currentSample], copy * sizeof(float));
     if (copy < n) memset(stream + copy * sizeof(float), 0, (n - copy) * sizeof(float));
     g_audio.currentSample += copy;
+    g_audio.lastCallbackTime = SDL_GetTicks();
+    g_audio.lastCallbackSample = g_audio.currentSample;
 }
 
 // State
@@ -60,7 +64,8 @@ static void startAudio() {
     if (g_running) return;
     g_running = true;
     g_audio.started = true;
-    g_start = SDL_GetTicks();
+    g_audio.lastCallbackTime = SDL_GetTicks();
+    g_audio.lastCallbackSample = 0;
     if (g_audio.samples && g_audio.totalSamples > 0) {
         SDL_PauseAudio(0);
     }
@@ -76,78 +81,71 @@ static void render() {
         w = 800; h = 600;
     }
 
-    // Dark background
-    SDL_SetRenderDrawColor(renderer, 18, 18, 24, 255);
+    // Black background
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
-    // Debug: always draw a visible red square in corner
-    SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
-    SDL_Rect debugRect = {10, 10, 50, 50};
-    SDL_RenderFillRect(renderer, &debugRect);
+    // Enable alpha blending for transparency
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-    // Progress bar sizing - responsive but capped
-    int barW = w - 80;
-    if (barW > 900) barW = 900;
-    if (barW < 200) barW = 200;
-    int barH = h / 15;
-    if (barH < 30) barH = 30;
-    if (barH > 60) barH = 60;
-    int barX = (w - barW) / 2;
-    int barY = (h - barH) / 2;
-    const float WINDOW_SECONDS = 10.0f;
-    const float PLAYHEAD_RATIO = 0.25f;
+    // Progress bar dimensions
+    const int BAR_W = 377;
+    const int BAR_H = 17;
+    int barX = (w - BAR_W) / 2;
+    int barY = (h - BAR_H) / 1.21;
+    int centerY = barY + BAR_H / 2;
+    const float WINDOW_SECONDS = 0.77f;
+    const float PLAYHEAD_RATIO = 0.21f;
 
-    float totalDuration = g_timeline.brightness.empty() ? 0.0f : g_timeline.brightness.size() / g_timeline.fps;
     float currentTime = g_running ? g_time : 0.0f;
+    float totalDuration = g_timeline.brightness.empty() ? 0.0f : g_timeline.brightness.size() / g_timeline.fps;
 
-    // Draw bar background (dark gray)
-    SDL_SetRenderDrawColor(renderer, 45, 45, 55, 255);
-    SDL_Rect bgRect = {barX, barY, barW, barH};
-    SDL_RenderFillRect(renderer, &bgRect);
-
-    // Draw border
-    SDL_SetRenderDrawColor(renderer, 100, 100, 120, 255);
-    SDL_RenderDrawRect(renderer, &bgRect);
-
-    // Draw waveform / brightness bars
+    // Draw waveform - symmetric around center line with fisheye distortion
     if (!g_timeline.brightness.empty()) {
-        // Calculate 10-second sliding window
-        float windowStart, windowEnd;
-        if (currentTime < WINDOW_SECONDS * PLAYHEAD_RATIO) {
-            windowStart = 0;
-            windowEnd = WINDOW_SECONDS;
-        } else if (currentTime > totalDuration - WINDOW_SECONDS * (1.0f - PLAYHEAD_RATIO)) {
-            windowEnd = totalDuration;
-            windowStart = totalDuration - WINDOW_SECONDS;
-        } else {
-            windowStart = currentTime - WINDOW_SECONDS * PLAYHEAD_RATIO;
-            windowEnd = currentTime + WINDOW_SECONDS * (1.0f - PLAYHEAD_RATIO);
-        }
+        // Fisheye distortion: center is zoomed in (slow), edges compressed (fast)
+        // Smooth sigmoid-like curve for symmetric distortion
+        auto distort = [&](float x) -> float {
+            // x in [-1, 1], aggressive fisheye
+            // Using: f(x) = x * (1 + 6*x^2) / 7
+            // f'(0) = 1/7 = 0.14 (very zoomed in center)
+            // f'(1) = (1 + 18)/7 = 2.71 (very compressed edges)
+            float absX = fabsf(x);
+            float sign = x >= 0 ? 1.0f : -1.0f;
+            return sign * absX * (1.0f + 6.0f * absX * absX) / 7.0f;
+        };
 
         int numFrames = g_timeline.brightness.size();
-        for (int px = 0; px < barW; px++) {
-            float t = windowStart + (px / (float)barW) * WINDOW_SECONDS;
+        for (int px = 0; px < BAR_W; px++) {
+            float r = px / (float)BAR_W; // 0 to 1
+            float d = r - PLAYHEAD_RATIO; // distance from playhead
+            float maxD = d >= 0 ? (1.0f - PLAYHEAD_RATIO) : PLAYHEAD_RATIO;
+            float normalized = d / maxD; // [-1, 1] for each side
+            float distorted = distort(normalized);
+            float t = currentTime + distorted * maxD * WINDOW_SECONDS;
+
             int frameIdx = (int)(t * g_timeline.fps);
             if (frameIdx < 0 || frameIdx >= numFrames) continue;
 
             float b = g_timeline.brightness[frameIdx];
-            int lineH = (int)(b * (barH - 6));
-            if (lineH < 2) lineH = 2;
-            int lineY = barY + (barH - lineH) / 2;
+            int halfH = (int)(b * (BAR_H / 2));
+            if (halfH < 1) halfH = 1;
             int x = barX + px;
 
-            Uint8 intensity = (Uint8)(80 + b * 175);
-            SDL_SetRenderDrawColor(renderer, 0, intensity, 255, 255);
-            SDL_RenderDrawLine(renderer, x, lineY + lineH, x, lineY);
+            // White with opacity - quiet parts fade out
+            Uint8 alpha = b < 0.3f ? (Uint8)(b / 0.1f * 15) : (Uint8)(15 + (b - 0.3f) / 0.7f * 240);
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, alpha);
+            // Draw symmetric line up and down from center
+            SDL_RenderDrawLine(renderer, x, centerY - halfH, x, centerY + halfH);
         }
 
-        // Draw playhead (bright white vertical line)
-        float playheadT = (currentTime - windowStart) / WINDOW_SECONDS;
-        int playheadX = barX + (int)(playheadT * barW);
+        // Horizontal center line
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 30);
+        SDL_RenderDrawLine(renderer, barX, centerY, barX + BAR_W, centerY);
+
+        // Playhead - white vertical line
+        int playheadX = barX + (int)(PLAYHEAD_RATIO * BAR_W);
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        SDL_RenderDrawLine(renderer, playheadX, barY - 6, playheadX, barY + barH + 6);
-        SDL_RenderDrawLine(renderer, playheadX - 4, barY - 6, playheadX + 4, barY - 6);
-        SDL_RenderDrawLine(renderer, playheadX - 4, barY + barH + 6, playheadX + 4, barY + barH + 6);
+        SDL_RenderDrawLine(renderer, playheadX, barY - 3, playheadX, barY + BAR_H + 3);
     }
 
     SDL_RenderPresent(renderer);
@@ -177,10 +175,11 @@ static void mainLoop() {
     }
     if (g_running) {
         if (g_hasAudio) {
-            // Sample-accurate sync to audio playback
-            g_time = (float)g_audio.currentSample / g_audio.sampleRate;
+            // Audio is master clock: use callback position + interpolation since last callback
+            float audioTime = (float)g_audio.lastCallbackSample / g_audio.sampleRate;
+            float elapsedSinceCallback = (SDL_GetTicks() - g_audio.lastCallbackTime) / 1000.0f;
+            g_time = audioTime + elapsedSinceCallback;
         } else {
-            // Test data: use timer
             g_time = (SDL_GetTicks() - g_start) / 1000.0f;
         }
     }
@@ -190,7 +189,7 @@ static void mainLoop() {
 int main(int argc, char* argv[]) {
     printf("Audio Visualizer\n");
     
-    const char* path = "audio/test-1.mp3";
+    const char* path = "audio/test.mp3";
     if (argc > 1) path = argv[1];
     
     auto mp3 = loadFile(path);
