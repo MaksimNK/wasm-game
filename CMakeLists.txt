@@ -10,6 +10,7 @@ find_package(SDL2 REQUIRED)
 set(SOURCES
     src/main.cpp
     src/audio.cpp
+    src/game.cpp
     deps/kiss_fft.c
 )
 

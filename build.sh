@@ -16,7 +16,7 @@ if [ "$1" = "wasm" ] || [ "$1" = "emscripten" ]; then
     
     mkdir -p out
     
-    emcc src/main.cpp src/audio.cpp deps/kiss_fft.c -o out/game.js \
+    emcc src/main.cpp src/audio.cpp src/game.cpp deps/kiss_fft.c -o out/game.js \
         -I include \
         -I deps \
         -s USE_SDL=2 \
@@ -32,7 +32,7 @@ if [ "$1" = "wasm" ] || [ "$1" = "emscripten" ]; then
 else
     echo "=== Building native binary with Clang ==="
     
-    clang++ src/main.cpp src/audio.cpp deps/kiss_fft.c -o game \
+    clang++ src/main.cpp src/audio.cpp src/game.cpp deps/kiss_fft.c -o game \
         -I include \
         -I deps \
         $(sdl2-config --cflags --libs) \
