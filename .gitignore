@@ -53,3 +53,8 @@ Thumbs.db
 # Dependencies
 vendor/
 node_modules/
+
+
+spec/
+
+audio/
