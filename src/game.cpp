@@ -48,19 +48,7 @@ static constexpr float BLOW_DURATION = 0.7f;
 // --- Sword constants ---
 static constexpr float SWORD_LENGTH = 115.0f;
 static constexpr float SWORD_HIT_EXTRA_RADIUS = 45.0f;
-static constexpr float SWORD_WINDUP_ANGLE = -M_PI * 0.89f;
-static constexpr float SWORD_SLASH_END_ANGLE = M_PI * 0.67f;
-static constexpr float SWORD_WINDUP_SPEED = 8.0f;
-static constexpr float SWORD_SLASH_SPEED = 25.0f;
-static constexpr float SWORD_IDLE_FREQ = 2.5f;
-static constexpr float SWORD_IDLE_AMP = 0.3f;
-static constexpr float SWORD_IDLE_SPEED = 6.0f;
 static constexpr float SLASH_PHASE_DURATION = 0.4f;
-
-// --- Ribbon trail constants ---
-static constexpr float RIBBON_LIFETIME = 0.5f;
-static constexpr int RIBBON_SEGMENTS_IDLE = 2;
-static constexpr int RIBBON_SEGMENTS_JUMP = 8;
 
 // --- Enemy flash/knockout ---
 static constexpr float FLASH_DURATION = 0.15f;
@@ -74,21 +62,63 @@ static constexpr float BLOW_FRICTION = 2.0f;
 static constexpr float ENEMY_SPEED_PX_PER_SEC = 60.0f;
 
 // --- Camera constants ---
-static constexpr float CAMERA_FOLLOW_SPEED = 5.0f;
-static constexpr float CAMERA_ZOOM_SPEED = 4.0f;
 static constexpr float ZOOM_IDLE = 1.3f;
 static constexpr float ZOOM_JUMP = 1.15f;
 static constexpr float SCREEN_CENTER_X = 0.5f;
 static constexpr float SCREEN_CENTER_Y = 0.45f;
-
-// --- Player rotation ---
-static constexpr float ANGLE_ROTATION_SPEED = 12.0f;
 
 // --- Easing bezier control points for jump ---
 static const Vec2 JUMP_EASE_P0(0.0f, 0.0f);
 static const Vec2 JUMP_EASE_P1(0.42f, 0.0f);
 static const Vec2 JUMP_EASE_P2(0.58f, 1.0f);
 static const Vec2 JUMP_EASE_P3(1.0f, 1.0f);
+
+// --- Constructors ---
+
+Player::Player()
+    : jumping(false)
+    , jumpTimer(0)
+    , jumpDuration(0.25f)
+    , swordOffset(0)
+    , hasSlashed(false)
+{}
+
+void Player::reset() {
+    pos = Vec2(0, 0);
+    angle = 0;
+    active = true;
+    jumping = false;
+    jumpTimer = 0;
+    jumpDuration = 0.25f;
+    swordOffset = 0;
+    hasSlashed = false;
+    swordRibbons.clear();
+}
+
+Enemy::Enemy()
+    : vel(0, 0)
+    , baseSpeed(0)
+    , radius(0)
+    , alive(true)
+    , flashTimer(0)
+    , blowAwayTimer(0)
+    , blowAwayVel(0, 0)
+    , beingBlown(false)
+{}
+
+void Enemy::reset() {
+    pos = Vec2(0, 0);
+    angle = 0;
+    active = true;
+    vel = Vec2(0, 0);
+    baseSpeed = 0;
+    radius = 0;
+    alive = true;
+    flashTimer = 0;
+    blowAwayTimer = 0;
+    blowAwayVel = Vec2(0, 0);
+    beingBlown = false;
+}
 
 float getBrightnessAtTime(const Timeline& timeline, float time) {
     if (timeline.gradient.empty()) return 0.0f;
@@ -115,24 +145,17 @@ static float easeCubic(float t) {
     return cubicBezier(t, JUMP_EASE_P0, JUMP_EASE_P1, JUMP_EASE_P2, JUMP_EASE_P3).y;
 }
 
+static Vec2 bezier(float t, Vec2 p0, Vec2 p1, Vec2 p2) {
+    float u = 1.0f - t;
+    return p0 * (u * u) + p1 * (2.0f * u * t) + p2 * (t * t);
+}
+
 void initGame(GameState& game, int screenW, int screenH) {
     srand(42);
-
-    // Player
-    game.player.pos = Vec2(0, 0);
-    game.player.angle = 0;
-    game.player.jumping = false;
-    game.player.jumpTimer = 0;
+    game.player.reset();
     game.player.jumpDuration = JUMP_DURATION;
-    game.player.swordOffset = 0;
-    game.player.hasSlashed = false;
-    game.player.swordRibbons.clear();
-
-    // Camera
     game.camera.pos = Vec2(0, 0);
     game.camera.zoom = ZOOM_IDLE;
-
-    // Game state
     game.running = true;
     game.spawnTimer = 0;
     game.timeScale = 1.0f;
@@ -155,11 +178,6 @@ static int findNearestEnemy(const GameState& game) {
         }
     }
     return nearest;
-}
-
-static Vec2 bezier(float t, Vec2 p0, Vec2 p1, Vec2 p2) {
-    float u = 1.0f - t;
-    return p0 * (u * u) + p1 * (2.0f * u * t) + p2 * (t * t);
 }
 
 static float angleDiff(float a, float b) {
@@ -185,7 +203,6 @@ static void blowAwayEnemies(GameState& game, Vec2 explosionPos) {
 }
 
 static void spawnEnemy(GameState& game, float gradient, float extraSpeed) {
-    // Calculate camera view bounds
     float viewW = 800.0f / game.camera.zoom;
     float viewH = 600.0f / game.camera.zoom;
     float margin = 100.0f;
@@ -213,31 +230,24 @@ static void spawnEnemy(GameState& game, float gradient, float extraSpeed) {
 
 void processAttack(GameState& game, const Timeline& timeline) {
     if (game.player.jumping) return;
-
-    // Init player attack state first
     game.player.jumping = true;
     game.player.hasSlashed = false;
     game.player.jumpTimer = game.player.jumpDuration;
 
     int target = findNearestEnemy(game);
-
     if (target >= 0) {
         Vec2 enemyPos = game.enemies[target].pos;
         game.targetEnemy = target;
         game.player.angle = atan2f(enemyPos.y - game.player.pos.y, enemyPos.x - game.player.pos.x);
-
         Vec2 dir = (enemyPos - game.player.pos).normalized();
-
         game.player.jumpStart = game.player.pos;
         game.player.jumpTarget = enemyPos;
-
         Vec2 mid = (game.player.jumpStart + game.player.jumpTarget) * 0.5f;
         Vec2 perp(-dir.y, dir.x);
         float curveAmount = CURVE_MIN + randf() * CURVE_VAR;
         if (randf() > 0.5f) curveAmount = -curveAmount;
         game.player.jumpControl = mid + perp * curveAmount;
     } else {
-        // No enemy: small lunge forward
         game.targetEnemy = -1;
         Vec2 dir(cosf(game.player.angle), sinf(game.player.angle));
         game.player.jumpStart = game.player.pos;
@@ -259,12 +269,9 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
     for (const auto& e : game.enemies) if (e.alive) aliveCount++;
 
     int targetCount = (int)(BASE_ENEMY_COUNT + gradient * ENEMY_COUNT_GRADIENT_SCALE);
-
     if (aliveCount < targetCount) {
         int needed = targetCount - aliveCount;
-        for (int i = 0; i < needed; i++) {
-            spawnEnemy(game, gradient, 0.0f);
-        }
+        for (int i = 0; i < needed; i++) spawnEnemy(game, gradient, 0.0f);
     }
 
     game.spawnTimer -= dt;
@@ -273,75 +280,21 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
         game.spawnTimer = SPAWN_TIMER_MIN + randf() * SPAWN_TIMER_VAR;
     }
 
-    // Sword animation: always on back (opposite to movement)
-    float targetSwordOffset;
-    if (game.player.jumping) {
-        float distToTarget = (game.player.jumpTarget - game.player.pos).len();
-        float startDist = (game.player.jumpTarget - game.player.jumpStart).len();
-        float progress = 1.0f - distToTarget / (startDist + 0.001f);
-        progress = progress < 0.0f ? 0.0f : (progress > 1.0f ? 1.0f : progress);
-
-        if (!game.player.hasSlashed) {
-            // Windup: sword draws back
-            float t = progress * progress * (3.0f - 2.0f * progress);
-            targetSwordOffset = SWORD_WINDUP_ANGLE * t;
-            if (distToTarget < SLASH_TRIGGER_DIST) game.player.hasSlashed = true;
-        } else {
-            // Slash: sword swings through
-            float slashProgress = (game.player.jumpDuration - game.player.jumpTimer) / (game.player.jumpDuration * SLASH_PHASE_DURATION);
-            slashProgress = slashProgress < 0.0f ? 0.0f : (slashProgress > 1.0f ? 1.0f : slashProgress);
-            float t = slashProgress * slashProgress;
-            targetSwordOffset = SWORD_WINDUP_ANGLE + (SWORD_SLASH_END_ANGLE - SWORD_WINDUP_ANGLE) * t;
-        }
-    } else {
-        // Idle: gentle sway on back
-        targetSwordOffset = sinf(game.gameTime * SWORD_IDLE_FREQ) * SWORD_IDLE_AMP;
-    }
-
-    float diff = angleDiff(targetSwordOffset, game.player.swordOffset);
-    float speed = game.player.jumping ? (game.player.hasSlashed ? SWORD_SLASH_SPEED : SWORD_WINDUP_SPEED) : SWORD_IDLE_SPEED;
-    game.player.swordOffset += diff * dt * speed;
-
-    // Update jump with cubic bezier easing
+    // Jump logic (game physics)
     if (game.player.jumping) {
         game.player.jumpTimer -= dt;
-
         float t = 1.0f - (game.player.jumpTimer / game.player.jumpDuration);
         t = easeCubic(t);
-
         game.player.pos = bezier(t, game.player.jumpStart, game.player.jumpControl, game.player.jumpTarget);
     }
 
-    // Animate player angle toward movement direction
-    Vec2 moveDir = game.player.pos - game.player.jumpStart;
-    if (game.player.jumping && moveDir.len() > 0.01f) {
-        float targetAngle = atan2f(moveDir.y, moveDir.x);
-        float angleDiffVal = angleDiff(targetAngle, game.player.angle);
-        game.player.angle += angleDiffVal * dt * ANGLE_ROTATION_SPEED;
-    }
-
-    // Calculate sword base and tip positions for ribbon trail
-    float swordAngle = game.player.angle + game.player.swordOffset;
-    Vec2 swordBase = game.player.pos;
-    Vec2 swordTip(
-        game.player.pos.x + cosf(swordAngle) * SWORD_LENGTH,
-        game.player.pos.y + sinf(swordAngle) * SWORD_LENGTH
-    );
-
-    // Add ribbon trail
-    int segments = game.player.jumping ? RIBBON_SEGMENTS_JUMP : RIBBON_SEGMENTS_IDLE;
-    for (int i = 0; i < segments; i++) {
-        SwordRibbon ribbon;
-        ribbon.base = swordBase;
-        ribbon.tip = swordTip;
-        ribbon.lifetime = RIBBON_LIFETIME;
-        ribbon.maxLifetime = RIBBON_LIFETIME;
-        ribbon.gradient = gradient;
-        game.player.swordRibbons.push_back(ribbon);
-    }
-
-    // Kill during slash
+    // Combat: slash detection
     if (game.player.jumping && game.player.hasSlashed) {
+        float swordAngle = game.player.angle + game.player.swordOffset;
+        Vec2 swordTip(
+            game.player.pos.x + cosf(swordAngle) * SWORD_LENGTH,
+            game.player.pos.y + sinf(swordAngle) * SWORD_LENGTH
+        );
         for (auto& e : game.enemies) {
             if (!e.alive) continue;
             float d = (e.pos - swordTip).len();
@@ -353,10 +306,10 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
         }
     }
 
+    // Jump completion
     if (game.player.jumping && game.player.jumpTimer <= 0) {
         game.player.jumping = false;
         game.player.pos = game.player.jumpTarget;
-
         if (game.targetEnemy >= 0 && game.targetEnemy < (int)game.enemies.size() &&
             game.enemies[game.targetEnemy].alive) {
             blowAwayEnemies(game, game.enemies[game.targetEnemy].pos);
@@ -367,10 +320,9 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
         game.player.hasSlashed = false;
     }
 
-    // Update enemies
+    // Enemy AI movement
     for (auto& e : game.enemies) {
         if (!e.alive) continue;
-
         if (e.beingBlown && e.blowAwayTimer > 0) {
             e.blowAwayTimer -= dt;
             e.pos = e.pos + e.blowAwayVel * dt;
@@ -391,26 +343,12 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
         if (e.flashTimer > 0) e.flashTimer -= dt;
     }
 
-    // Remove dead enemies after flash/knockout animation
+    // Remove dead enemies
     game.enemies.erase(
         std::remove_if(game.enemies.begin(), game.enemies.end(),
             [](const Enemy& e) { return !e.alive && e.flashTimer <= 0; }),
         game.enemies.end()
     );
-
-    // Fade sword ribbons
-    for (auto& sr : game.player.swordRibbons) sr.lifetime -= dt;
-    game.player.swordRibbons.erase(
-        std::remove_if(game.player.swordRibbons.begin(), game.player.swordRibbons.end(),
-            [](const SwordRibbon& r) { return r.lifetime <= 0; }),
-        game.player.swordRibbons.end()
-    );
-
-    // Camera
-    Vec2 diffCam = game.player.pos - game.camera.pos;
-    game.camera.pos = game.camera.pos + diffCam * dt * CAMERA_FOLLOW_SPEED;
-    float targetZoom = game.player.jumping ? ZOOM_JUMP : ZOOM_IDLE;
-    game.camera.zoom += (targetZoom - game.camera.zoom) * dt * CAMERA_ZOOM_SPEED;
 }
 
 Vec2 getWorldToScreen(const GameState& game, const Vec2& worldPos, int screenW, int screenH) {

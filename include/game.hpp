@@ -16,18 +16,6 @@ struct Vec2 {
     Vec2 normalized() const { float l = len(); return l > 0.001f ? Vec2(x/l, y/l) : Vec2(0,0); }
 };
 
-struct Enemy {
-    Vec2 pos;
-    Vec2 vel;
-    float baseSpeed;
-    float radius;
-    bool alive;
-    float flashTimer;
-    float blowAwayTimer;
-    Vec2 blowAwayVel;
-    bool beingBlown;
-};
-
 struct SwordRibbon {
     Vec2 base;
     Vec2 tip;
@@ -36,9 +24,20 @@ struct SwordRibbon {
     float gradient;
 };
 
-struct Player {
+// --- Game Object Hierarchy ---
+
+// Base class for all game entities
+struct GameObject {
     Vec2 pos;
     float angle;
+    bool active;
+    
+    GameObject() : pos(0, 0), angle(0), active(true) {}
+    virtual ~GameObject() = default;
+};
+
+// Player entity
+struct Player : GameObject {
     bool jumping;
     Vec2 jumpTarget;
     Vec2 jumpStart;
@@ -48,6 +47,24 @@ struct Player {
     float swordOffset;
     bool hasSlashed;
     std::vector<SwordRibbon> swordRibbons;
+    
+    Player();
+    void reset();
+};
+
+// Enemy entity
+struct Enemy : GameObject {
+    Vec2 vel;
+    float baseSpeed;
+    float radius;
+    bool alive;
+    float flashTimer;
+    float blowAwayTimer;
+    Vec2 blowAwayVel;
+    bool beingBlown;
+    
+    Enemy();
+    void reset();
 };
 
 struct Camera {
