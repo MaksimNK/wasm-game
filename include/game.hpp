@@ -22,61 +22,54 @@ struct Enemy {
     float baseSpeed;
     float radius;
     bool alive;
-    float hitTimer;
+    float flashTimer;
     float blowAwayTimer;
     Vec2 blowAwayVel;
     bool beingBlown;
 };
 
-struct Wall {
-    float x, y, w, h;
-};
-
-// Ribbon trail - stores the full sword line (base + tip) for mesh-like trail
 struct SwordRibbon {
-    Vec2 base;       // Sword base position
-    Vec2 tip;        // Sword tip position
+    Vec2 base;
+    Vec2 tip;
     float lifetime;
     float maxLifetime;
-    float brightness;
+    float gradient;
 };
 
-struct GameState {
-    Vec2 playerPos;
-    Vec2 playerVel;
-    float playerAngle;
-    std::vector<Enemy> enemies;
-    std::vector<Wall> walls;
-    Vec2 camera;
-    float cameraZoom;
-    float timeScale;
-    float gameTime;
-    float musicTime;
-    int score;
-    int combo;
+struct Player {
+    Vec2 pos;
+    float angle;
     bool jumping;
     Vec2 jumpTarget;
     Vec2 jumpStart;
     Vec2 jumpControl;
     float jumpTimer;
     float jumpDuration;
+    float swordOffset;
+    bool hasSlashed;
     std::vector<SwordRibbon> swordRibbons;
-    float screenShake;
-    float lastAttackTime;
-    float attackCooldown;
+};
+
+struct Camera {
+    Vec2 pos;
+    float zoom;
+};
+
+struct GameState {
+    Player player;
+    Camera camera;
+    std::vector<Enemy> enemies;
+    float timeScale;
+    float gameTime;
+    float musicTime;
     bool running;
     float spawnTimer;
-    float swordAngle;
-    float swordOffset;
-    bool swordActive;
-    bool hasSlashed;
     int maxEnemies;
     int targetEnemy;
 };
 
 float getBrightnessAtTime(const Timeline& timeline, float time);
 float getTimeScale(float brightness);
-float getBarOpacity(float brightness);
 void initGame(GameState& game, int screenW, int screenH);
 void updateGame(GameState& game, const Timeline& timeline, float realDt, float musicTime);
 void processAttack(GameState& game, const Timeline& timeline);

@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <cstdint>
+#include <SDL.h>
 
 class AudioDecoder {
     std::vector<float> samples;
@@ -14,8 +15,29 @@ public:
 };
 
 struct Timeline {
-    std::vector<float> brightness; // 0.0-1.0 per frame
+    std::vector<float> gradient; // 0.0-1.0 per frame
     float fps;
 };
 
 Timeline analyzeAudio(const std::vector<float>& audio, int sampleRate);
+
+// --- Audio playback ---
+struct AudioPlayer {
+    std::vector<float> buffer;
+    const float* samples = nullptr;
+    int totalSamples = 0;
+    int currentSample = 0;
+    bool started = false;
+    int sampleRate = 44100;
+    Uint32 lastCallbackTime = 0;
+    int lastCallbackSample = 0;
+    
+    void setSamples(const std::vector<float>& data, int rate);
+    void start();
+    void stop();
+    void fillStream(Uint8* stream, int len);
+    float getPlaybackTime() const;
+};
+
+// SDL audio callback wrapper
+void sdlAudioCallback(void* userdata, Uint8* stream, int len);
