@@ -1,0 +1,55 @@
+# VS Code
+.vscode/
+*.code-workspace
+
+# C++ build artifacts
+*.exe
+*.out
+*.app
+*.o
+*.obj
+*.so
+*.dll
+*.dylib
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# Build directories
+build/
+cmake-build-*/
+out/
+Debug/
+Release/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# C++ test results
+Testing/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.tmp
+*.swp
+*~
+
+# Dependencies
+vendor/
+node_modules/
