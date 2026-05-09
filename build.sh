@@ -11,7 +11,7 @@ if [ "$1" = "wasm" ] || [ "$1" = "emscripten" ]; then
         exit 1
     fi
     
-    emcc src/main.cpp -o game.js \
+    emcc src/main.cpp -o out/game.js \
         -s USE_SDL=2 \
         -s WASM=1 \
         -s EXPORTED_FUNCTIONS='["_main"]' \
@@ -19,7 +19,7 @@ if [ "$1" = "wasm" ] || [ "$1" = "emscripten" ]; then
         -s ALLOW_MEMORY_GROWTH=1 \
         -O2
     
-    echo "Build complete: game.js, game.wasm"
+    echo "Build complete: out/game.js, out/game.wasm"
 else
     echo "=== Building native binary with Clang ==="
     

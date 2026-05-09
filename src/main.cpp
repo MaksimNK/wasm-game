@@ -100,7 +100,7 @@ int main(int argc, char* argv[]) {
         
         handle_input();
         render();
-        SDL_Delay(16);
+        SDL_Delay(ы);
     }
 #endif
     

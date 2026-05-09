@@ -5,7 +5,7 @@
 set -e
 
 echo "=== Cleaning old files ==="
-rm -f game game.js game.wasm game.html
+rm -f out/game.js out/game.wasm out/game.html game
 echo "Old files deleted"
 
 echo ""
@@ -24,7 +24,7 @@ fi
 echo ""
 echo "=== Starting server on port 6931 ==="
 # Start server in background and suppress logs
-python3 -m http.server 6931 > /dev/null 2>&1 &
+cd out && python3 -m http.server 6931 > /dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2
 
