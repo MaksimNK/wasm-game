@@ -241,7 +241,7 @@ void processAttack(GameState& game, const Timeline& timeline) {
         game.player.angle = atan2f(enemyPos.y - game.player.pos.y, enemyPos.x - game.player.pos.x);
         Vec2 dir = (enemyPos - game.player.pos).normalized();
         game.player.jumpStart = game.player.pos;
-        game.player.jumpTarget = enemyPos;
+        game.player.jumpTarget = enemyPos - dir * (SWORD_LENGTH * 0.5f);
         Vec2 mid = (game.player.jumpStart + game.player.jumpTarget) * 0.5f;
         Vec2 perp(-dir.y, dir.x);
         float curveAmount = CURVE_MIN + randf() * CURVE_VAR;

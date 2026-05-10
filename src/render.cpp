@@ -32,20 +32,31 @@ static constexpr float ALPHA_HIGH_MAX = 240.0f;
 static constexpr float ALPHA_HIGH_OFFSET = 15.0f;
 
 // --- Animation constants ---
-static constexpr float SWORD_WINDUP_ANGLE = -M_PI * 0.89f;
-static constexpr float SWORD_SLASH_END_ANGLE = M_PI * 0.67f;
-static constexpr float SWORD_WINDUP_SPEED = 8.0f;
-static constexpr float SWORD_SLASH_SPEED = 25.0f;
-static constexpr float SWORD_IDLE_FREQ = 2.5f;
-static constexpr float SWORD_IDLE_AMP = 0.3f;
-static constexpr float SWORD_IDLE_SPEED = 6.0f;
-static constexpr float SLASH_PHASE_DURATION = 0.4f;
+// Character faces enemy (angle=0). Back = behind character (π).
+// Character's left = up (-π/2), right = down (+π/2).
+static constexpr float SWORD_WINDUP_LEFT   =  M_PI * 0.92f;   // back-left (~166deg)
+static constexpr float SWORD_WINDUP_RIGHT  = -M_PI * 0.92f;   // back-right (~-166deg)
+static constexpr float SWORD_END_LEFT      =  M_PI * 0.75f;   // back-left follow-through
+static constexpr float SWORD_END_RIGHT     = -M_PI * 0.75f;   // back-right follow-through
+static constexpr float SWORD_IDLE_BASE_ANGLE = M_PI;          // directly behind
+static constexpr float SWORD_IDLE_SWAY_AMP = 0.35f;
+static constexpr float SWORD_IDLE_SWAY_FREQ = 2.0f;
+static constexpr float SWORD_IDLE_SMOOTH_SPEED = 6.0f;
+static constexpr float SWORD_CHARGE_SPEED = 18.0f;
+static constexpr float SWORD_SLASH_SPEED = 28.0f;
+static constexpr float SWORD_RECOVER_SPEED = 10.0f;
+static constexpr float CHAIN_WINDOW = 0.20f;
 static constexpr float ANGLE_ROTATION_SPEED = 12.0f;
 static constexpr float CAMERA_FOLLOW_SPEED = 5.0f;
 static constexpr float CAMERA_ZOOM_SPEED = 4.0f;
-static constexpr float RIBBON_LIFETIME = 0.5f;
-static constexpr int RIBBON_SEGMENTS_IDLE = 2;
-static constexpr int RIBBON_SEGMENTS_JUMP = 8;
+static constexpr float RIBBON_LIFETIME_IDLE = 0.3f;
+static constexpr float RIBBON_LIFETIME_CHARGE = 0.35f;
+static constexpr float RIBBON_LIFETIME_SLASH = 0.7f;
+static constexpr float RIBBON_LIFETIME_RECOVER = 0.4f;
+static constexpr int RIBBON_SEGMENTS_IDLE = 3;
+static constexpr int RIBBON_SEGMENTS_CHARGE = 5;
+static constexpr int RIBBON_SEGMENTS_SLASH = 20;
+static constexpr int RIBBON_SEGMENTS_RECOVER = 6;
 static constexpr float SWORD_LENGTH = 115.0f;
 
 // --- Player render constants ---
@@ -75,37 +86,179 @@ static float angleDiff(float a, float b) {
     return diff;
 }
 
+static float easeOutCubic(float t) {
+    if (t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
+    float u = 1.0f - t;
+    return 1.0f - u * u * u;
+}
+
+static float easeInCubic(float t) {
+    if (t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
+    return t * t * t;
+}
+
+static float easeOutQuad(float t) {
+    if (t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
+    float u = 1.0f - t;
+    return 1.0f - u * u;
+}
+
+static float easeInOutCubic(float t) {
+    if (t <= 0.0f) return 0.0f;
+    if (t >= 1.0f) return 1.0f;
+    if (t < 0.5f) return 4.0f * t * t * t;
+    float u = -2.0f * t + 2.0f;
+    return 1.0f - u * u * u / 2.0f;
+}
+
+static Vec2 bezier(float t, Vec2 p0, Vec2 p1, Vec2 p2) {
+    float u = 1.0f - t;
+    return p0 * (u * u) + p1 * (2.0f * u * t) + p2 * (t * t);
+}
+
+// --- Animation state (render-side) ---
+
+enum class SwordPhase { IDLE, CHARGE, SLASH, RECOVER };
+
+struct SwordAnimState {
+    SwordPhase phase = SwordPhase::IDLE;
+    float chargeStartOffset = 0.0f;
+    float landTime = -999.0f;
+    float lastAttackEndOffset = 0.0f;
+    bool wasJumping = false;
+    bool slashFromLeft = true;  // true = windup left, slash to right
+};
+
+static SwordAnimState g_swordAnim;
+
+// --- Unified attack timeline ratios ---
+static constexpr float CHARGE_RATIO  = 0.30f;
+static constexpr float SLASH_RATIO   = 0.35f;
+static constexpr float RECOVER_RATIO = 0.35f;
+
 // --- Animation system (render team owns this) ---
+// SINGLE unified timeline: attackProgress drives movement, sword, hit detection, ribbons
 
 void updateAnimations(GameState& game, float dt) {
-    // Sword animation: smooth transitions between windup / slash / idle
-    float targetSwordOffset;
-    if (game.player.jumping) {
-        float distToTarget = (game.player.jumpTarget - game.player.pos).len();
-        float startDist = (game.player.jumpTarget - game.player.jumpStart).len();
-        float progress = 1.0f - distToTarget / (startDist + 0.001f);
-        progress = progress < 0.0f ? 0.0f : (progress > 1.0f ? 1.0f : progress);
+    // Detect jump start / land
+    bool justStartedJump = game.player.jumping && !g_swordAnim.wasJumping;
+    bool justLanded = !game.player.jumping && g_swordAnim.wasJumping;
+    g_swordAnim.wasJumping = game.player.jumping;
 
-        if (!game.player.hasSlashed) {
-            float t = progress * progress * (3.0f - 2.0f * progress);
-            targetSwordOffset = SWORD_WINDUP_ANGLE * t;
-            if (distToTarget < 70.0f) game.player.hasSlashed = true;
-        } else {
-            float slashProgress = (game.player.jumpDuration - game.player.jumpTimer)
-                                  / (game.player.jumpDuration * SLASH_PHASE_DURATION);
-            slashProgress = slashProgress < 0.0f ? 0.0f : (slashProgress > 1.0f ? 1.0f : slashProgress);
-            float t = slashProgress * slashProgress;
-            targetSwordOffset = SWORD_WINDUP_ANGLE + (SWORD_SLASH_END_ANGLE - SWORD_WINDUP_ANGLE) * t;
-        }
-    } else {
-        targetSwordOffset = sinf(game.gameTime * SWORD_IDLE_FREQ) * SWORD_IDLE_AMP;
+    if (justLanded) {
+        g_swordAnim.landTime = game.gameTime;
+        g_swordAnim.lastAttackEndOffset = game.player.swordOffset;
     }
 
+    float timeSinceLand = game.gameTime - g_swordAnim.landTime;
+    bool canChain = timeSinceLand < CHAIN_WINDOW;
+
+    // --- Unified attack progress (0.0 = start, 1.0 = end) ---
+    float attackProgress = 0.0f;
+    if (game.player.jumping) {
+        attackProgress = 1.0f - (game.player.jumpTimer / game.player.jumpDuration);
+        attackProgress = fmaxf(0.0f, fminf(1.0f, attackProgress));
+    }
+
+    // --- Direction init (once per jump) ---
+    if (justStartedJump) {
+        float currentOffset = canChain ? g_swordAnim.lastAttackEndOffset : game.player.swordOffset;
+        float normalized = angleDiff(currentOffset, 0.0f);
+        g_swordAnim.slashFromLeft = normalized > 0.0f;
+        g_swordAnim.chargeStartOffset = game.player.swordOffset;
+
+        if (canChain && fabsf(g_swordAnim.lastAttackEndOffset) > 0.3f) {
+            g_swordAnim.chargeStartOffset = g_swordAnim.lastAttackEndOffset;
+        }
+    }
+
+    // --- Derive phase from unified progress ---
+    if (game.player.jumping) {
+        if (attackProgress < CHARGE_RATIO) {
+            g_swordAnim.phase = SwordPhase::CHARGE;
+        } else if (attackProgress < CHARGE_RATIO + SLASH_RATIO) {
+            g_swordAnim.phase = SwordPhase::SLASH;
+        } else {
+            g_swordAnim.phase = SwordPhase::RECOVER;
+        }
+    } else {
+        g_swordAnim.phase = SwordPhase::IDLE;
+    }
+
+    // Phase-local progress (0-1 within current phase)
+    float phaseProgress = 0.0f;
+    if (g_swordAnim.phase == SwordPhase::CHARGE) {
+        phaseProgress = attackProgress / CHARGE_RATIO;
+    } else if (g_swordAnim.phase == SwordPhase::SLASH) {
+        phaseProgress = (attackProgress - CHARGE_RATIO) / SLASH_RATIO;
+    } else if (g_swordAnim.phase == SwordPhase::RECOVER) {
+        phaseProgress = (attackProgress - CHARGE_RATIO - SLASH_RATIO) / RECOVER_RATIO;
+    }
+
+    // --- Movement (driven by unified attackProgress) ---
+    if (game.player.jumping) {
+        float moveProgress;
+        if (attackProgress < CHARGE_RATIO) {
+            // Charge: fast leap to enemy (0% to 65%), aggressive acceleration
+            moveProgress = easeInCubic(phaseProgress) * 0.65f;
+        } else if (attackProgress < CHARGE_RATIO + SLASH_RATIO) {
+            // Slash: close remaining distance (65% to 100%), contact
+            moveProgress = 0.65f + 0.35f * easeOutQuad(phaseProgress);
+        } else {
+            // Recover: stay at destination
+            moveProgress = 1.0f;
+        }
+        game.player.pos = bezier(moveProgress,
+                                  game.player.jumpStart,
+                                  game.player.jumpControl,
+                                  game.player.jumpTarget);
+    }
+
+    // --- Sword offset (driven by unified attackProgress) ---
+    float windupOffset = g_swordAnim.slashFromLeft ? SWORD_WINDUP_LEFT : SWORD_WINDUP_RIGHT;
+    float endOffset = g_swordAnim.slashFromLeft ? SWORD_END_RIGHT : SWORD_END_LEFT;
+
+    float targetSwordOffset;
+    if (g_swordAnim.phase == SwordPhase::IDLE) {
+        float sway = sinf(game.gameTime * SWORD_IDLE_SWAY_FREQ) * SWORD_IDLE_SWAY_AMP;
+        targetSwordOffset = SWORD_IDLE_BASE_ANGLE + sway;
+    } else if (g_swordAnim.phase == SwordPhase::CHARGE) {
+        // Charge: sword held at windup position on character's back
+        // No arc — just ensure it's at the back; smooth speed handles transition
+        targetSwordOffset = windupOffset;
+    } else if (g_swordAnim.phase == SwordPhase::SLASH) {
+        float t = easeOutCubic(phaseProgress);
+        targetSwordOffset = windupOffset + (endOffset - windupOffset) * t;
+    } else { // RECOVER
+        float t = easeOutQuad(phaseProgress);
+        // Shortest path back to idle (through the back, never through front)
+        float diffToIdle = angleDiff(SWORD_IDLE_BASE_ANGLE, endOffset);
+        targetSwordOffset = endOffset + diffToIdle * t;
+    }
+
+    // Smooth interpolation to target
     float diff = angleDiff(targetSwordOffset, game.player.swordOffset);
-    float speed = game.player.jumping
-        ? (game.player.hasSlashed ? SWORD_SLASH_SPEED : SWORD_WINDUP_SPEED)
-        : SWORD_IDLE_SPEED;
+    float speed;
+    if (g_swordAnim.phase == SwordPhase::SLASH) {
+        speed = SWORD_SLASH_SPEED;
+    } else if (g_swordAnim.phase == SwordPhase::CHARGE) {
+        speed = SWORD_CHARGE_SPEED;
+    } else if (g_swordAnim.phase == SwordPhase::RECOVER) {
+        speed = SWORD_RECOVER_SPEED;
+    } else {
+        speed = SWORD_IDLE_SMOOTH_SPEED;
+    }
     game.player.swordOffset += diff * dt * speed;
+
+    // --- Hit detection (synced to unified timeline) ---
+    if (g_swordAnim.phase == SwordPhase::SLASH && !game.player.hasSlashed) {
+        if (phaseProgress >= 0.45f) {
+            game.player.hasSlashed = true;
+        }
+    }
 
     // Smooth player angle rotation
     Vec2 moveDir = game.player.pos - game.player.jumpStart;
@@ -121,7 +274,7 @@ void updateAnimations(GameState& game, float dt) {
     float targetZoom = game.player.jumping ? 1.15f : 1.3f;
     game.camera.zoom += (targetZoom - game.camera.zoom) * dt * CAMERA_ZOOM_SPEED;
 
-    // Ribbon trail generation
+    // --- Ribbon trail generation (phase-aware, driven by unified timeline) ---
     float swordAngle = game.player.angle + game.player.swordOffset;
     Vec2 swordBase = game.player.pos;
     Vec2 swordTip(
@@ -129,14 +282,40 @@ void updateAnimations(GameState& game, float dt) {
         game.player.pos.y + sinf(swordAngle) * SWORD_LENGTH
     );
 
-    int segments = game.player.jumping ? RIBBON_SEGMENTS_JUMP : RIBBON_SEGMENTS_IDLE;
+    int segments;
+    float ribbonLifetime;
+    float ribbonIntensity;
+
+    switch (g_swordAnim.phase) {
+        case SwordPhase::CHARGE:
+            segments = RIBBON_SEGMENTS_CHARGE;
+            ribbonLifetime = RIBBON_LIFETIME_CHARGE;
+            ribbonIntensity = 0.5f;
+            break;
+        case SwordPhase::SLASH:
+            segments = RIBBON_SEGMENTS_SLASH;
+            ribbonLifetime = RIBBON_LIFETIME_SLASH;
+            ribbonIntensity = 1.0f;
+            break;
+        case SwordPhase::RECOVER:
+            segments = RIBBON_SEGMENTS_RECOVER;
+            ribbonLifetime = RIBBON_LIFETIME_RECOVER;
+            ribbonIntensity = 0.6f;
+            break;
+        default:
+            segments = RIBBON_SEGMENTS_IDLE;
+            ribbonLifetime = RIBBON_LIFETIME_IDLE;
+            ribbonIntensity = 0.25f;
+            break;
+    }
+
     for (int i = 0; i < segments; i++) {
         SwordRibbon ribbon;
         ribbon.base = swordBase;
         ribbon.tip = swordTip;
-        ribbon.lifetime = RIBBON_LIFETIME;
-        ribbon.maxLifetime = RIBBON_LIFETIME;
-        ribbon.gradient = 0.5f; // animation team sets visual intensity
+        ribbon.lifetime = ribbonLifetime;
+        ribbon.maxLifetime = ribbonLifetime;
+        ribbon.gradient = ribbonIntensity;
         game.player.swordRibbons.push_back(ribbon);
     }
 
@@ -362,7 +541,7 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
     if (running) {
         SDL_SetRenderDrawBlendMode(r->renderer, SDL_BLENDMODE_BLEND);
         
-        // Sword ribbon trail
+        // Sword ribbon trail with interpolation for smooth curves
         for (size_t i = 1; i < game.player.swordRibbons.size(); i++) {
             const auto& prev = game.player.swordRibbons[i-1];
             const auto& curr = game.player.swordRibbons[i];
@@ -378,8 +557,25 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
             Vec2 currBase = getWorldToScreen(game, curr.base, w, h);
             Vec2 currTip = getWorldToScreen(game, curr.tip, w, h);
             
-            setColor(r->renderer, ghostAlpha);
-            renderRibbon(r->renderer, prevBase, prevTip, currBase, currTip, ghostAlpha);
+            // Interpolate between stored ribbon positions for smooth curves
+            // More steps for high-intensity phases (slash)
+            int interpSteps = (curr.gradient > 0.8f) ? 6 : (curr.gradient > 0.5f ? 3 : 1);
+            Vec2 lastBase = prevBase;
+            Vec2 lastTip = prevTip;
+            
+            for (int step = 1; step <= interpSteps; step++) {
+                float t = step / (float)interpSteps;
+                float smoothT = t * t * (3.0f - 2.0f * t); // smoothstep
+                
+                Vec2 ibase = prevBase + (currBase - prevBase) * smoothT;
+                Vec2 itip = prevTip + (currTip - prevTip) * smoothT;
+                
+                setColor(r->renderer, ghostAlpha);
+                renderRibbon(r->renderer, lastBase, lastTip, ibase, itip, ghostAlpha);
+                
+                lastBase = ibase;
+                lastTip = itip;
+            }
         }
         
         // Enemies
@@ -395,8 +591,22 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
         Vec2 ps = getWorldToScreen(game, game.player.pos, w, h);
         drawPlayer(r->renderer, ps.x, ps.y, game.player.angle, baseAlpha);
         
-        // Sword
-        Uint8 swordAlpha = game.player.jumping ? 255 : (Uint8)(baseAlpha * 0.9f);
+        // Sword (phase-aware alpha for visual punch)
+        Uint8 swordAlpha;
+        switch (g_swordAnim.phase) {
+            case SwordPhase::SLASH:
+                swordAlpha = 255;
+                break;
+            case SwordPhase::CHARGE:
+                swordAlpha = (Uint8)(baseAlpha * 0.7f + 80);
+                break;
+            case SwordPhase::RECOVER:
+                swordAlpha = (Uint8)(baseAlpha * 0.8f + 40);
+                break;
+            default:
+                swordAlpha = (Uint8)(baseAlpha * 0.85f);
+                break;
+        }
         drawSword(r->renderer, ps.x, ps.y, game.player.angle + game.player.swordOffset, swordAlpha);
     }
     
