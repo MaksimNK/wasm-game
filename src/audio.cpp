@@ -34,7 +34,7 @@ static constexpr float POWER_CURVE = 0.15f;
 static constexpr float ATTACK_ALPHA = 0.90f;   // Fast rise
 static constexpr float DECAY_ALPHA = 0.15f;    // Slow fall
 
-AudioDecoder::AudioDecoder() : sampleRate(44100) {}
+// Constructor is defaulted in header
 
 bool AudioDecoder::loadMP3(const uint8_t* data, size_t size) {
     mp3dec_t mp3d;

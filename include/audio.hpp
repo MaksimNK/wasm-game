@@ -6,22 +6,21 @@
 
 class AudioDecoder {
     std::vector<float> samples;
-    int sampleRate;
+    int sampleRate = 44100;
 public:
-    AudioDecoder();
+    AudioDecoder() = default;
     bool loadMP3(const uint8_t* data, size_t size);
     const std::vector<float>& getSamples() const { return samples; }
     int getSampleRate() const { return sampleRate; }
 };
 
 struct Timeline {
-    std::vector<float> gradient; // 0.0-1.0 per frame
-    float fps;
+    std::vector<float> gradient;
+    float fps = 86.0f;
 };
 
 Timeline analyzeAudio(const std::vector<float>& audio, int sampleRate);
 
-// --- Audio playback ---
 struct AudioPlayer {
     std::vector<float> buffer;
     const float* samples = nullptr;
@@ -39,5 +38,4 @@ struct AudioPlayer {
     float getPlaybackTime() const;
 };
 
-// SDL audio callback wrapper
 void sdlAudioCallback(void* userdata, Uint8* stream, int len);
