@@ -12,11 +12,7 @@
 
 // --- App constants ---
 static constexpr const char* APP_NAME = "Rhythm Slayer";
-<<<<<<< HEAD
-static constexpr const char* DEFAULT_AUDIO_PATH = "audio/test.mp3";
-=======
 static constexpr const char* DEFAULT_AUDIO_PATH = "audio/test-2.mp3";
->>>>>>> db58727 (add scrore bar)
 static constexpr int DEFAULT_WIDTH = 800;
 static constexpr int DEFAULT_HEIGHT = 600;
 

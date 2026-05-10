@@ -110,7 +110,7 @@ Enemy::Enemy()
     : vel(0, 0)
     , baseSpeed(0)
     , radius(0)
-    , alive(true)
+    , alive(true) 
     , flashTimer(0)
     , blowAwayTimer(0)
     , blowAwayVel(0, 0)
@@ -245,6 +245,41 @@ void processScoreHit(GameState& game, bool goodTiming) {
     }
 }
 
+float InputState::aimAngle() const {
+    float dx = 0.0f, dy = 0.0f;
+    if (a) dx -= 1.0f;
+    if (d) dx += 1.0f;
+    if (w) dy -= 1.0f;
+    if (s) dy += 1.0f;
+    if (dx == 0.0f && dy == 0.0f) return -999.0f;
+    return atan2f(dy, dx);
+}
+
+static int findEnemyInDirection(const GameState& game, float aimAngle, float sectorWidth) {
+    int best = -1;
+    float bestScore = 999999.0f;
+    float halfSector = sectorWidth * 0.5f;
+    
+    for (size_t i = 0; i < game.enemies.size(); i++) {
+        if (!game.enemies[i].alive) continue;
+        float dist = (game.enemies[i].pos - game.player.pos).len();
+        if (dist <= MIN_ATTACK_DIST) continue;
+        
+        float enemyAngle = atan2f(game.enemies[i].pos.y - game.player.pos.y,
+                                  game.enemies[i].pos.x - game.player.pos.x);
+        float diff = fabsf(atan2f(sinf(enemyAngle - aimAngle), cosf(enemyAngle - aimAngle)));
+        
+        if (diff <= halfSector) {
+            float score = dist * 0.5f + diff * 100.0f;
+            if (score < bestScore) {
+                bestScore = score;
+                best = (int)i;
+            }
+        }
+    }
+    return best;
+}
+
 static int findNearestEnemy(const GameState& game) {
     int nearest = -1;
     float minDist = 999999.0f;
@@ -307,13 +342,21 @@ static void spawnEnemy(GameState& game, float gradient, float extraSpeed) {
     game.enemies.push_back(e);
 }
 
-void processAttack(GameState& game, const Timeline& timeline) {
+void processAttack(GameState& game, const Timeline& timeline, const InputState& input) {
     if (game.player.jumping) return;
     game.player.jumping = true;
     game.player.hasSlashed = false;
     game.player.jumpTimer = game.player.jumpDuration;
 
-    int target = findNearestEnemy(game);
+    int target = -1;
+    float aim = input.aimAngle();
+    if (aim > -900.0f) {
+        target = findEnemyInDirection(game, aim, M_PI / 3.0f);
+    }
+    if (target < 0) {
+        target = findNearestEnemy(game);
+    }
+
     if (target >= 0) {
         Vec2 enemyPos = game.enemies[target].pos;
         game.targetEnemy = target;
