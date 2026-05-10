@@ -49,7 +49,7 @@
         "  devbox run fetch-deps",
         "fi",
         "echo '=== Building native binary with Clang ==='",
-        "clang++ src/main.cpp src/audio.cpp src/game.cpp src/render.cpp deps/kiss_fft.c -o game -I include -I deps $(sdl2-config --cflags --libs) -lm -std=c++11 -O2",
+        "clang++ src/main.cpp src/audio.cpp src/game.cpp src/render.cpp deps/kiss_fft.c -o game -I include -I deps $(sdl2-config --cflags --libs) -lGL -lm -std=c++11 -O2",
         "echo 'Build complete: game'"
       ],
       "build-wasm": [

@@ -59,17 +59,6 @@ static bool step() {
         return false;
     }
     
-    if (attack) {
-        if (!g_running) {
-            startAudio();
-            initGame(g_game, DEFAULT_WIDTH, DEFAULT_HEIGHT);
-        } else {
-            bool goodTiming = isGoodTiming(g_timeline, g_time);
-            processScoreHit(g_game, goodTiming);
-            processAttack(g_game, g_timeline, input);
-        }
-    }
-    
     Uint32 now = SDL_GetTicks();
     static Uint32 lastTime = now;
     float realDt = (now - lastTime) / 1000.0f;
@@ -84,6 +73,18 @@ static bool step() {
         }
         
         updateGame(g_game, g_timeline, realDt, g_time);
+    }
+    
+    // Process attack input after game update so enemy deaths are synced
+    if (attack) {
+        if (!g_running) {
+            startAudio();
+            initGame(g_game, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+        } else {
+            bool goodTiming = isGoodTiming(g_timeline, g_time);
+            processScoreHit(g_game, goodTiming);
+            processAttack(g_game, g_timeline, input);
+        }
     }
     
     // Animation pass (render team)

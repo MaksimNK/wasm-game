@@ -81,6 +81,8 @@ struct Player : GameObject {
     float swordAngleOffset;  // Added by WASD during slash
     SwordCategory swordCategory;
     float targetAngle;       // Smooth rotation target during jumps
+    bool canChainAttack;     // True during SLASH/RECOVER phases
+    bool newAttack;          // Set by processAttack, cleared by render
     
     Player();
     void reset();
@@ -96,6 +98,7 @@ struct Enemy : GameObject {
     float blowAwayTimer;
     Vec2 blowAwayVel;
     bool beingBlown;
+    float curvePhase;
     
     Enemy();
     void reset();

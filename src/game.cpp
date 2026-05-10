@@ -19,13 +19,13 @@ static constexpr float BASE_ENEMY_COUNT = 3.0f;
 static constexpr float ENEMY_COUNT_GRADIENT_SCALE = 2.5f;
 
 // --- Spawn constants ---
-static constexpr float SPAWN_DIST_LOW = 400.0f;
-static constexpr float SPAWN_DIST_HIGH = 500.0f;
-static constexpr float SPAWN_DIST_VARIANCE = 300.0f;
+static constexpr float SPAWN_DIST_LOW = 280.0f;
+static constexpr float SPAWN_DIST_HIGH = 380.0f;
+static constexpr float SPAWN_DIST_VARIANCE = 200.0f;
 static constexpr float SPAWN_GRADIENT_THRESHOLD = 0.6f;
-static constexpr float MIN_SPAWN_SPEED = 1.5f;
-static constexpr float SPAWN_SPEED_VAR = 1.0f;
-static constexpr float SPAWN_GRADIENT_SPEED_BOOST = 0.5f;
+static constexpr float MIN_SPAWN_SPEED = 4.0f;
+static constexpr float SPAWN_SPEED_VAR = 2.5f;
+static constexpr float SPAWN_GRADIENT_SPEED_BOOST = 2.0f;
 static constexpr float MIN_ENEMY_RADIUS = 14.0f;
 static constexpr float ENEMY_RADIUS_VAR = 10.0f;
 static constexpr float SPAWN_TIMER_MIN = 0.8f;
@@ -47,19 +47,19 @@ static constexpr float BLOW_DURATION = 0.7f;
 
 // --- Sword constants ---
 static constexpr float SWORD_LENGTH = 115.0f;
-static constexpr float SWORD_HIT_EXTRA_RADIUS = 45.0f;
+static constexpr float SWORD_HIT_EXTRA_RADIUS = 55.0f;
 static constexpr float SLASH_PHASE_DURATION = 0.4f;
 
 // --- Enemy flash/knockout ---
 static constexpr float FLASH_DURATION = 0.15f;
 
 // --- Enemy movement constants ---
-static constexpr float ENEMY_ACCEL = 0.04f;
-static constexpr float ENEMY_SPEED_SCALE = 1.5f;
-static constexpr float ENEMY_RHYTHM_MIN = 0.5f;
-static constexpr float ENEMY_RHYTHM_MAX = 1.2f;
+static constexpr float ENEMY_ACCEL = 0.12f;
+static constexpr float ENEMY_SPEED_SCALE = 3.0f;
+static constexpr float ENEMY_RHYTHM_MIN = 1.2f;
+static constexpr float ENEMY_RHYTHM_MAX = 2.5f;
 static constexpr float BLOW_FRICTION = 2.0f;
-static constexpr float ENEMY_SPEED_PX_PER_SEC = 60.0f;
+static constexpr float ENEMY_SPEED_PX_PER_SEC = 120.0f;
 
 // --- Camera constants ---
 static constexpr float ZOOM_IDLE = 1.3f;
@@ -95,6 +95,8 @@ Player::Player()
     , swordAngleOffset(0)
     , swordCategory(SwordCategory::Default)
     , targetAngle(0)
+    , canChainAttack(false)
+    , newAttack(false)
 {}
 
 void Player::reset() {
@@ -110,17 +112,20 @@ void Player::reset() {
     swordAngleOffset = 0;
     swordCategory = SwordCategory::Default;
     targetAngle = 0;
+    canChainAttack = false;
+    newAttack = false;
 }
 
 Enemy::Enemy()
     : vel(0, 0)
     , baseSpeed(0)
     , radius(0)
-    , alive(true) 
+    , alive(true)
     , flashTimer(0)
     , blowAwayTimer(0)
     , blowAwayVel(0, 0)
     , beingBlown(false)
+    , curvePhase(0)
 {}
 
 void Enemy::reset() {
@@ -135,6 +140,7 @@ void Enemy::reset() {
     blowAwayTimer = 0;
     blowAwayVel = Vec2(0, 0);
     beingBlown = false;
+    curvePhase = randf() * 2.0f * M_PI;
 }
 
 ScoreSystem::ScoreSystem()
@@ -349,10 +355,16 @@ static void spawnEnemy(GameState& game, float gradient, float extraSpeed) {
 }
 
 void processAttack(GameState& game, const Timeline& timeline, const InputState& input) {
-    if (game.player.jumping) return;
-    game.player.jumping = true;
+    bool isChaining = game.player.jumping && game.player.canChainAttack;
+    
+    if (game.player.jumping && !isChaining) return;
+    
+    if (!isChaining) {
+        game.player.jumping = true;
+    }
     game.player.hasSlashed = false;
     game.player.jumpTimer = game.player.jumpDuration;
+    game.player.newAttack = true;
 
     // Calculate sword angle offset and category from WASD before jump
     game.player.swordAngleOffset = 0.0f;
@@ -432,12 +444,9 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
         game.spawnTimer = SPAWN_TIMER_MIN + randf() * SPAWN_TIMER_VAR;
     }
 
-    // Jump logic (game physics)
+    // Jump logic (timer only - position is driven by updateAnimations)
     if (game.player.jumping) {
         game.player.jumpTimer -= dt;
-        float t = 1.0f - (game.player.jumpTimer / game.player.jumpDuration);
-        t = easeCubic(t);
-        game.player.pos = bezier(t, game.player.jumpStart, game.player.jumpControl, game.player.jumpTarget);
     }
 
     // Combat: slash detection
@@ -489,11 +498,30 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
                 }
             } else {
                 float rhythmSpeed = e.baseSpeed * (ENEMY_RHYTHM_MIN + gradient * ENEMY_RHYTHM_MAX);
-                Vec2 toPlayer = (game.player.pos - e.pos).normalized();
-                e.vel.x += toPlayer.x * ENEMY_ACCEL * rhythmSpeed;
-                e.vel.y += toPlayer.y * ENEMY_ACCEL * rhythmSpeed;
+                
+                // Predictive targeting: aim ahead of player
+                Vec2 toPlayer = (game.player.pos - e.pos);
+                float distToPlayer = toPlayer.len();
+                Vec2 playerVel = game.player.jumping ? (game.player.jumpTarget - game.player.pos) * (1.0f / game.player.jumpDuration) : Vec2(0, 0);
+                float predictionTime = fminf(distToPlayer / (rhythmSpeed * ENEMY_SPEED_PX_PER_SEC + 0.1f), 0.5f);
+                Vec2 predictedPos = game.player.pos + playerVel * predictionTime;
+                toPlayer = (predictedPos - e.pos).normalized();
+                
+                // Curved movement: aggressive sinusoidal lateral force
+                e.curvePhase += dt * 5.0f;
+                Vec2 perp(-toPlayer.y, toPlayer.x);
+                float curveStrength = 0.8f + 0.6f * sinf(e.curvePhase);
+                Vec2 targetDir = toPlayer + perp * curveStrength;
+                targetDir = targetDir.normalized();
+                
+                // Aggressive acceleration with dramatic speed bursts
+                float aggressionMult = 1.0f + 0.8f * sinf(e.curvePhase * 0.7f);
+                e.vel.x += targetDir.x * ENEMY_ACCEL * rhythmSpeed * aggressionMult;
+                e.vel.y += targetDir.y * ENEMY_ACCEL * rhythmSpeed * aggressionMult;
+                
                 float speed = e.vel.len();
-                if (speed > rhythmSpeed * ENEMY_SPEED_SCALE) e.vel = e.vel.normalized() * rhythmSpeed * ENEMY_SPEED_SCALE;
+                float maxSpeed = rhythmSpeed * ENEMY_SPEED_SCALE * (1.0f + 0.3f * gradient);
+                if (speed > maxSpeed) e.vel = e.vel.normalized() * maxSpeed;
                 e.pos = e.pos + e.vel * dt * ENEMY_SPEED_PX_PER_SEC;
             }
         } else {

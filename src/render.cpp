@@ -1,5 +1,10 @@
 #include "render.hpp"
 #include <SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <SDL_opengles2.h>
+#else
+#include <SDL_opengl.h>
+#endif
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
@@ -46,8 +51,8 @@ static constexpr float SWORD_IDLE_SMOOTH_SPEED = 6.0f;
 static constexpr float SWORD_CHARGE_SPEED = 18.0f;
 static constexpr float SWORD_SLASH_SPEED = 28.0f;
 static constexpr float ANGLE_ROTATION_SPEED = 12.0f;
-static constexpr float CAMERA_FOLLOW_SPEED = 5.0f;
-static constexpr float CAMERA_ZOOM_SPEED = 4.0f;
+static constexpr float CAMERA_FOLLOW_SPEED = 8.0f;
+static constexpr float CAMERA_ZOOM_SPEED = 6.0f;
 static constexpr float RIBBON_LIFETIME_IDLE = 0.6f;
 static constexpr float RIBBON_LIFETIME_CHARGE = 0.7f;
 static constexpr float RIBBON_LIFETIME_SLASH = 1.4f;
@@ -72,12 +77,12 @@ static constexpr int CIRCLE_SEGMENTS = 8;
 static constexpr float CIRCLE_INNER_RATIO = 0.6f;
 
 // --- Window constants ---
-static constexpr Uint32 WINDOW_FLAGS_NATIVE = SDL_WINDOW_RESIZABLE;
-static constexpr Uint32 WINDOW_FLAGS_EMSCRIPTEN = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE;
+static constexpr Uint32 WINDOW_FLAGS_NATIVE = SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL;
+static constexpr Uint32 WINDOW_FLAGS_EMSCRIPTEN = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL;
 
 // --- Forward declarations (score system additions at end of file) ---
 static void updateScoreAnimations(ScoreSystem& sc, float dt);
-static void drawScoreBar(SDL_Renderer* r, int screenW, int screenH, const ScoreSystem& score);
+static void drawScoreBar(SDL_Renderer* r, int screenW, int screenH, const GameState& game);
 
 // --- Animation helpers ---
 
@@ -147,26 +152,13 @@ static constexpr float RECOVER_RATIO = 0.35f;
 void updateAnimations(GameState& game, float dt) {
     // Detect jump start / land
     bool justStartedJump = game.player.jumping && !g_swordAnim.wasJumping;
-    bool justLanded = !game.player.jumping && g_swordAnim.wasJumping;
     g_swordAnim.wasJumping = game.player.jumping;
-
-    if (justLanded) {
-        g_swordAnim.landTime = game.gameTime;
-        g_swordAnim.lastAttackEndOffset = game.player.swordOffset;
-    }
 
     // --- Unified attack progress (0.0 = start, 1.0 = end) ---
     float attackProgress = 0.0f;
     if (game.player.jumping) {
         attackProgress = 1.0f - (game.player.jumpTimer / game.player.jumpDuration);
         attackProgress = fmaxf(0.0f, fminf(1.0f, attackProgress));
-    }
-
-    // --- Direction init (once per jump) ---
-    if (justStartedJump) {
-        g_swordAnim.chargeStartOffset = g_swordAnim.lastAttackEndOffset;
-        float normalized = angleDiff(g_swordAnim.lastAttackEndOffset, 0.0f);
-        g_swordAnim.slashFromLeft = normalized > 0.0f;
     }
 
     // --- Derive phase from unified progress ---
@@ -180,6 +172,28 @@ void updateAnimations(GameState& game, float dt) {
         }
     } else {
         g_swordAnim.phase = SwordPhase::IDLE;
+    }
+
+    // --- Combo system: allow chaining during SLASH and RECOVER,
+    //     but ONLY after current target enemy is dead ---
+    bool targetIsDead = game.targetEnemy < 0 ||
+                        game.targetEnemy >= (int)game.enemies.size() ||
+                        !game.enemies[game.targetEnemy].alive;
+    game.player.canChainAttack = targetIsDead &&
+                                 ((g_swordAnim.phase == SwordPhase::SLASH) ||
+                                  (g_swordAnim.phase == SwordPhase::RECOVER));
+
+    // --- Direction init (once per jump or combo) ---
+    if (justStartedJump || game.player.newAttack) {
+        g_swordAnim.chargeStartOffset = g_swordAnim.lastAttackEndOffset;
+        float normalized = angleDiff(g_swordAnim.lastAttackEndOffset, 0.0f);
+        g_swordAnim.slashFromLeft = normalized > 0.0f;
+        game.player.newAttack = false;
+    }
+
+    // Track sword end offset during chainable phases for smooth combos
+    if (g_swordAnim.phase == SwordPhase::SLASH || g_swordAnim.phase == SwordPhase::RECOVER) {
+        g_swordAnim.lastAttackEndOffset = game.player.swordOffset;
     }
 
     // Phase-local progress (0-1 within current phase)
@@ -209,6 +223,12 @@ void updateAnimations(GameState& game, float dt) {
                                   game.player.jumpStart,
                                   game.player.jumpControl,
                                   game.player.jumpTarget);
+    }
+
+    // --- Smooth player angle rotation FIRST (before hit detection) ---
+    if (game.player.jumping) {
+        float ad = angleDiff(game.player.targetAngle, game.player.angle);
+        game.player.angle += ad * dt * ANGLE_ROTATION_SPEED;
     }
 
     // --- Sword offset (driven by unified attackProgress) ---
@@ -242,22 +262,17 @@ void updateAnimations(GameState& game, float dt) {
     game.player.swordOffset += diff * dt * speed;
 
     // --- Hit detection (synced to unified timeline) ---
+    // Now runs AFTER angle/sword are updated for this frame
     if (g_swordAnim.phase == SwordPhase::SLASH && !game.player.hasSlashed) {
         if (phaseProgress >= 0.45f) {
             game.player.hasSlashed = true;
         }
     }
 
-    // Smooth player angle rotation toward target enemy
-    if (game.player.jumping) {
-        float ad = angleDiff(game.player.targetAngle, game.player.angle);
-        game.player.angle += ad * dt * ANGLE_ROTATION_SPEED;
-    }
-
     // Camera smoothing
     Vec2 diffCam = game.player.pos - game.camera.pos;
     game.camera.pos = game.camera.pos + diffCam * dt * CAMERA_FOLLOW_SPEED;
-    float targetZoom = game.player.jumping ? 1.15f : 1.3f;
+    float targetZoom = game.player.jumping ? 1.05f : 1.45f;
     game.camera.zoom += (targetZoom - game.camera.zoom) * dt * CAMERA_ZOOM_SPEED;
 
     // --- Ribbon trail generation (phase-aware, driven by unified timeline) ---
@@ -295,6 +310,11 @@ void updateAnimations(GameState& game, float dt) {
             break;
     }
 
+    // Scale trail segments by music intensity (timeScale 0.15-1.0)
+    float intensity = (game.timeScale - 0.15f) / 0.85f;
+    float trailMultiplier = 0.3f + 0.7f * intensity; // 0.3 to 1.0
+    segments = (int)(segments * trailMultiplier);
+
     for (int i = 0; i < segments; i++) {
         SwordRibbon ribbon;
         ribbon.base = swordBase;
@@ -322,13 +342,163 @@ void updateAnimations(GameState& game, float dt) {
     updateScoreAnimations(game.score, dt);
 }
 
+// --- GLSL Brightness Shader ---
+#ifdef __EMSCRIPTEN__
+static const char* brightnessVertexShader = R"(
+attribute vec2 aPos;
+attribute vec2 aTexCoord;
+varying vec2 vTexCoord;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+    vTexCoord = aTexCoord;
+}
+)";
+
+static const char* brightnessFragmentShader = R"(
+precision mediump float;
+varying vec2 vTexCoord;
+uniform sampler2D uTexture;
+uniform float uBrightness;
+void main() {
+    vec4 color = texture2D(uTexture, vTexCoord);
+    gl_FragColor = color * uBrightness;
+}
+)";
+#else
+static const char* brightnessVertexShader = R"(
+#version 120
+attribute vec2 aPos;
+attribute vec2 aTexCoord;
+varying vec2 vTexCoord;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+    vTexCoord = aTexCoord;
+}
+)";
+
+static const char* brightnessFragmentShader = R"(
+#version 120
+varying vec2 vTexCoord;
+uniform sampler2D uTexture;
+uniform float uBrightness;
+void main() {
+    vec4 color = texture2D(uTexture, vTexCoord);
+    gl_FragColor = color * uBrightness;
+}
+)";
+#endif
+
+static float quadVertices[] = {
+    // positions    // texCoords
+    -1.0f,  1.0f,  0.0f, 0.0f,
+    -1.0f, -1.0f,  0.0f, 1.0f,
+     1.0f, -1.0f,  1.0f, 1.0f,
+    -1.0f,  1.0f,  0.0f, 0.0f,
+     1.0f, -1.0f,  1.0f, 1.0f,
+     1.0f,  1.0f,  1.0f, 0.0f
+};
+
+struct ShaderState {
+    GLuint program = 0;
+    GLuint quadVBO = 0;
+    GLint brightnessLoc = -1;
+    GLint posLoc = -1;
+    GLint texCoordLoc = -1;
+    bool initialized = false;
+};
+
+static GLuint compileShader(const char* source, GLenum type) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, nullptr);
+    glCompileShader(shader);
+    GLint success;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetShaderInfoLog(shader, 512, nullptr, infoLog);
+        fprintf(stderr, "[SHADER] Compilation failed: %s\n", infoLog);
+        glDeleteShader(shader);
+        return 0;
+    }
+    return shader;
+}
+
+static bool initShader(ShaderState& shader) {
+    GLuint vs = compileShader(brightnessVertexShader, GL_VERTEX_SHADER);
+    GLuint fs = compileShader(brightnessFragmentShader, GL_FRAGMENT_SHADER);
+    if (!vs || !fs) return false;
+
+    shader.program = glCreateProgram();
+    glAttachShader(shader.program, vs);
+    glAttachShader(shader.program, fs);
+    glLinkProgram(shader.program);
+
+    GLint success;
+    glGetProgramiv(shader.program, GL_LINK_STATUS, &success);
+    if (!success) {
+        char infoLog[512];
+        glGetProgramInfoLog(shader.program, 512, nullptr, infoLog);
+        fprintf(stderr, "[SHADER] Linking failed: %s\n", infoLog);
+        glDeleteProgram(shader.program);
+        shader.program = 0;
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        return false;
+    }
+
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+
+    shader.posLoc = glGetAttribLocation(shader.program, "aPos");
+    shader.texCoordLoc = glGetAttribLocation(shader.program, "aTexCoord");
+    shader.brightnessLoc = glGetUniformLocation(shader.program, "uBrightness");
+
+    glGenBuffers(1, &shader.quadVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, shader.quadVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    shader.initialized = true;
+    return true;
+}
+
+static void destroyShader(ShaderState& shader) {
+    if (shader.quadVBO) glDeleteBuffers(1, &shader.quadVBO);
+    if (shader.program) glDeleteProgram(shader.program);
+    shader = ShaderState();
+}
+
 // --- Renderer implementation ---
 struct Renderer {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
+    SDL_Texture* postProcess = nullptr;
+    GLuint screenTexture = 0;
+    int screenTextureW = 0;
+    int screenTextureH = 0;
+    ShaderState shader;
     int width = 800;
     int height = 600;
 };
+
+static bool isOpenGLBackend(SDL_Renderer* renderer) {
+    SDL_RendererInfo info;
+    if (SDL_GetRendererInfo(renderer, &info) < 0) return false;
+    return strcmp(info.name, "opengl") == 0;
+}
+
+static void ensureScreenTexture(Renderer* r, int w, int h) {
+    if (!r) return;
+    if (r->screenTexture && r->screenTextureW == w && r->screenTextureH == h) return;
+    if (r->screenTexture) glDeleteTextures(1, &r->screenTexture);
+    glGenTextures(1, &r->screenTexture);
+    glBindTexture(GL_TEXTURE_2D, r->screenTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    r->screenTextureW = w;
+    r->screenTextureH = h;
+}
 
 // --- Internal drawing helpers ---
 
@@ -478,6 +648,20 @@ static Uint8 getBarAlpha(float gradient) {
 
 // --- Public API ---
 
+static void ensurePostProcessTexture(Renderer* r, int w, int h) {
+    if (!r || !r->renderer) return;
+    if (r->postProcess) {
+        int tw, th;
+        SDL_QueryTexture(r->postProcess, nullptr, nullptr, &tw, &th);
+        if (tw == w && th == h) return;
+        SDL_DestroyTexture(r->postProcess);
+        r->postProcess = nullptr;
+    }
+    r->postProcess = SDL_CreateTexture(r->renderer, SDL_PIXELFORMAT_RGBA8888,
+                                       SDL_TEXTUREACCESS_TARGET, w, h);
+    SDL_SetTextureBlendMode(r->postProcess, SDL_BLENDMODE_BLEND);
+}
+
 Renderer* createRenderer(const char* title, int width, int height) {
     Renderer* r = new Renderer();
     r->width = width;
@@ -497,12 +681,20 @@ Renderer* createRenderer(const char* title, int width, int height) {
         r->renderer = SDL_CreateRenderer(r->window, -1, SDL_RENDERER_SOFTWARE);
     }
     if (!r->renderer) { SDL_DestroyWindow(r->window); delete r; return nullptr; }
-    
+
+    // Initialize GLSL shader using SDL's existing GL context (if OpenGL backend)
+    if (isOpenGLBackend(r->renderer)) {
+        initShader(r->shader);
+    }
+
     return r;
 }
 
 void destroyRenderer(Renderer* r) {
     if (!r) return;
+    destroyShader(r->shader);
+    if (r->screenTexture) glDeleteTextures(1, &r->screenTexture);
+    if (r->postProcess) SDL_DestroyTexture(r->postProcess);
     if (r->renderer) SDL_DestroyRenderer(r->renderer);
     if (r->window) SDL_DestroyWindow(r->window);
     delete r;
@@ -522,16 +714,27 @@ void getScreenSize(Renderer* r, int& w, int& h) {
 void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
                  float time, bool running) {
     if (!r || !r->renderer) return;
-    
+
     int w, h;
     getScreenSize(r, w, h);
-    
+
     float gradient = getBrightnessAtTime(timeline, time);
     Uint8 baseAlpha = (Uint8)(BASE_ALPHA_MIN + gradient * BASE_ALPHA_RANGE);
-    
+    bool useGL = r->shader.initialized && isOpenGLBackend(r->renderer);
+
+    // --- Setup render target ---
+    if (useGL) {
+        // Render directly to screen for GL framebuffer capture
+        SDL_SetRenderTarget(r->renderer, nullptr);
+    } else {
+        // Fallback: render to texture for SDL color mod
+        ensurePostProcessTexture(r, w, h);
+        SDL_SetRenderTarget(r->renderer, r->postProcess);
+    }
+
     SDL_SetRenderDrawColor(r->renderer, 0, 0, 0, 255);
     SDL_RenderClear(r->renderer);
-    
+
     if (running) {
         SDL_SetRenderDrawBlendMode(r->renderer, SDL_BLENDMODE_BLEND);
         
@@ -544,7 +747,7 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
             if (lifeRatio > 1.0f) lifeRatio = 1.0f;
             if (lifeRatio <= 0) continue;
             
-            Uint8 ghostAlpha = (Uint8)(curr.gradient * 255.0f * lifeRatio);
+            Uint8 ghostAlpha = (Uint8)(fminf(255.0f, curr.gradient * 255.0f * lifeRatio / 1.35f));
             
             Vec2 prevBase = getWorldToScreen(game, prev.base, w, h);
             Vec2 prevTip = getWorldToScreen(game, prev.tip, w, h);
@@ -614,14 +817,18 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
         drawSword(r->renderer, ps.x, ps.y, game.player.angle + game.player.swordOffset, swordAlpha);
         
         // Score bar
-        drawScoreBar(r->renderer, w, h, game.score);
+        drawScoreBar(r->renderer, w, h, game);
     }
+    
+    // Dynamic UI offset based on character movement (more dramatic parallax)
+    float uiOffsetX = (game.player.pos.x - game.camera.pos.x) * game.camera.zoom * 0.35f;
+    float uiOffsetY = (game.player.pos.y - game.camera.pos.y) * game.camera.zoom * 0.22f;
     
     // Progress bar (always rendered)
     SDL_SetRenderDrawBlendMode(r->renderer, SDL_BLENDMODE_BLEND);
     
-    int barX = (w - BAR_W) / 2;
-    int barY = (int)((h - BAR_H) / BAR_Y_RATIO);
+    int barX = (int)((w - BAR_W) / 2 + uiOffsetX);
+    int barY = (int)((h - BAR_H) / BAR_Y_RATIO + uiOffsetY);
     int centerY = barY + BAR_H / 2;
     
     if (!timeline.gradient.empty()) {
@@ -648,21 +855,65 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
             if (halfH < 1) halfH = 1;
             int x = barX + px;
             
-            setColor(r->renderer, getBarAlpha(g));
+            Uint8 alpha = getBarAlpha(g);
+            SDL_SetRenderDrawColor(r->renderer, 220, 60, 60, alpha);
             SDL_RenderDrawLine(r->renderer, x, centerY - halfH, x, centerY + halfH);
         }
         
-        // Center line
-        setColor(r->renderer, (Uint8)CENTER_LINE_ALPHA);
-        SDL_RenderDrawLine(r->renderer, barX, centerY, barX + BAR_W, centerY);
-        
         // Playhead
         int playheadX = barX + (int)(PLAYHEAD_RATIO * BAR_W);
-        setColor(r->renderer, (Uint8)PLAYHEAD_ALPHA);
+        SDL_SetRenderDrawColor(r->renderer, 255, 100, 100, (Uint8)PLAYHEAD_ALPHA);
         SDL_RenderDrawLine(r->renderer, playheadX, barY - 3, playheadX, barY + BAR_H + 3);
     }
     
-    SDL_RenderPresent(r->renderer);
+    // --- Post-processing: apply brightness based on gradient ---
+    float brightness = 0.60f + 0.40f * gradient;
+
+    if (useGL) {
+        // GLSL path: copy framebuffer to texture, then draw with shader
+        SDL_RenderFlush(r->renderer);
+
+        ensureScreenTexture(r, w, h);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, r->screenTexture);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
+
+        glViewport(0, 0, w, h);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+
+        glUseProgram(r->shader.program);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, r->screenTexture);
+        glUniform1i(glGetUniformLocation(r->shader.program, "uTexture"), 0);
+        glUniform1f(r->shader.brightnessLoc, brightness);
+
+        glBindBuffer(GL_ARRAY_BUFFER, r->shader.quadVBO);
+        glVertexAttribPointer(r->shader.posLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(r->shader.posLoc);
+        glVertexAttribPointer(r->shader.texCoordLoc, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        glEnableVertexAttribArray(r->shader.texCoordLoc);
+
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glDisableVertexAttribArray(r->shader.posLoc);
+        glDisableVertexAttribArray(r->shader.texCoordLoc);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glUseProgram(0);
+
+        SDL_GL_SwapWindow(r->window);
+    } else {
+        // Fallback: SDL texture color mod
+        SDL_SetRenderTarget(r->renderer, nullptr);
+        SDL_SetRenderDrawColor(r->renderer, 0, 0, 0, 255);
+        SDL_RenderClear(r->renderer);
+        Uint8 brightByte = (Uint8)(brightness * 255.0f);
+        SDL_SetTextureColorMod(r->postProcess, brightByte, brightByte, brightByte);
+        SDL_RenderCopy(r->renderer, r->postProcess, nullptr, nullptr);
+        SDL_RenderPresent(r->renderer);
+    }
 }
 
 bool pollEvents(GameState& game, const Timeline& timeline, bool& attack, bool& start, InputState& input) {
@@ -698,9 +949,8 @@ bool pollEvents(GameState& game, const Timeline& timeline, bool& attack, bool& s
 // ============================================================================
 
 // --- Score bar constants ---
-static constexpr int SCORE_BAR_W = 200;
-static constexpr int SCORE_BAR_H = 20;
-static constexpr int SCORE_BAR_MARGIN = 20;
+static constexpr int SCORE_BAR_H = 8;
+static constexpr int SCORE_BAR_W = BAR_W / 2;
 
 // --- Score animation ---
 static void updateScoreAnimations(ScoreSystem& sc, float dt) {
@@ -720,92 +970,62 @@ static void updateScoreAnimations(ScoreSystem& sc, float dt) {
     }
 }
 
-// --- 7-segment digit drawing ---
-static void drawDigit(SDL_Renderer* r, int digit, int x, int y, int w, int h, Uint8 alpha) {
-    static const int segments[10] = {
-        0b1110111, // 0
-        0b0010010, // 1
-        0b1011101, // 2
-        0b1011011, // 3
-        0b0111010, // 4
-        0b1101011, // 5
-        0b1101111, // 6
-        0b1010010, // 7
-        0b1111111, // 8
-        0b1111011, // 9
-    };
-    int seg = segments[digit % 10];
-    int sw = w / 5;
-    int sh = h / 8;
-    int mw = w / 2;
-    int mh = h / 2;
-    SDL_SetRenderDrawColor(r, 255, 255, 255, alpha);
-    if (seg & 0b1000000) SDL_RenderDrawLine(r, x + sw, y, x + w - sw, y);
-    if (seg & 0b0100000) SDL_RenderDrawLine(r, x, y + sh, x, y + mh - sh);
-    if (seg & 0b0010000) SDL_RenderDrawLine(r, x + w, y + sh, x + w, y + mh - sh);
-    if (seg & 0b0001000) SDL_RenderDrawLine(r, x + sw, y + mh, x + w - sw, y + mh);
-    if (seg & 0b0000100) SDL_RenderDrawLine(r, x, y + mh + sh, x, y + h - sh);
-    if (seg & 0b0000010) SDL_RenderDrawLine(r, x + w, y + mh + sh, x + w, y + h - sh);
-    if (seg & 0b0000001) SDL_RenderDrawLine(r, x + sw, y + h, x + w - sw, y + h);
-}
-
-static void drawNumber(SDL_Renderer* r, int number, int x, int y, int digitW, int digitH, Uint8 alpha) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", number);
-    int len = 0;
-    while (buf[len]) len++;
-    int totalW = len * digitW + (len - 1) * 4;
-    int startX = x - totalW;
-    for (int i = 0; i < len; i++) {
-        drawDigit(r, buf[i] - '0', startX + i * (digitW + 4), y, digitW, digitH, alpha);
-    }
-}
-
 // --- Score bar rendering ---
-static void drawScoreBar(SDL_Renderer* r, int screenW, int screenH, const ScoreSystem& score) {
-    int barX = SCORE_BAR_MARGIN;
-    int barY = (int)((screenH - BAR_H) / BAR_Y_RATIO) - SCORE_BAR_H - 8;
-
-    SDL_Rect bgRect = {barX, barY, SCORE_BAR_W, SCORE_BAR_H};
-    SDL_SetRenderDrawColor(r, 20, 20, 20, 230);
-    SDL_RenderFillRect(r, &bgRect);
-
-    int fillW = (int)(SCORE_BAR_W * score.displayScaleFill);
-    if (fillW > 0) {
+static void drawScoreBar(SDL_Renderer* r, int screenW, int screenH, const GameState& game) {
+    const ScoreSystem& score = game.score;
+    
+    // Dynamic UI offset based on character movement (more dramatic parallax)
+    float uiOffsetX = (game.player.pos.x - game.camera.pos.x) * game.camera.zoom * 0.35f;
+    float uiOffsetY = (game.player.pos.y - game.camera.pos.y) * game.camera.zoom * 0.22f;
+    
+    int barX = (int)((screenW - SCORE_BAR_W) / 2 + uiOffsetX);
+    int barY = (int)((screenH - BAR_H) / BAR_Y_RATIO + BAR_H + 12 + uiOffsetY);
+    int centerY = barY + SCORE_BAR_H / 2;
+    
+    auto distort = [](float x) -> float {
+        float absX = fabsf(x);
+        float sign = x >= 0 ? 1.0f : -1.0f;
+        return sign * absX * (1.0f + DISTORTION_FACTOR * absX * absX) / DISTORTION_DIVISOR;
+    };
+    
+    float fillExtent = score.displayScaleFill;
+    
+    for (int px = 0; px < SCORE_BAR_W; px++) {
+        float rat = px / (float)SCORE_BAR_W;
+        float d = rat - 0.5f;
+        float normalized = d / 0.5f;
+        float distorted = distort(normalized);
+        float distFromCenter = fabsf(distorted);
+        
+        if (distFromCenter > fillExtent) continue;
+        
+        float intensity = 1.0f - distFromCenter * 0.5f;
+        int halfH = (int)(intensity * (SCORE_BAR_H / 2));
+        if (halfH < 1) halfH = 1;
+        
+        int x = barX + px;
+        
         Uint8 r_val, g_val, b_val;
         int displayLvl = score.displayLevel;
-        if (displayLvl == 0) { r_val = 255; g_val = 255; b_val = 255; }
-        else if (displayLvl == 1) { r_val = 0; g_val = 255; b_val = 255; }
-        else if (displayLvl == 2) { r_val = 255; g_val = 0; b_val = 255; }
-        else { r_val = 255; g_val = 215; b_val = 0; }
-
-        SDL_SetRenderDrawColor(r, r_val, g_val, b_val, 255);
-        SDL_Rect fillRect = {barX, barY, fillW, SCORE_BAR_H};
-        SDL_RenderFillRect(r, &fillRect);
+        if (displayLvl == 0) { r_val = 180; g_val = 40; b_val = 40; }
+        else if (displayLvl == 1) { r_val = 220; g_val = 60; b_val = 60; }
+        else if (displayLvl == 2) { r_val = 255; g_val = 80; b_val = 80; }
+        else { r_val = 255; g_val = 120; b_val = 120; }
+        
+        Uint8 alpha = getBarAlpha(intensity);
+        SDL_SetRenderDrawColor(r, r_val, g_val, b_val, alpha);
+        SDL_RenderDrawLine(r, x, centerY - halfH, x, centerY + halfH);
     }
-
-    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
-    SDL_RenderDrawRect(r, &bgRect);
-
-    SDL_SetRenderDrawColor(r, 180, 180, 180, 255);
-    SDL_Rect borderRect = {barX - 2, barY - 2, SCORE_BAR_W + 4, SCORE_BAR_H + 4};
-    SDL_RenderDrawRect(r, &borderRect);
-
+    
+    // Hit feedback
     if (score.hitFeedbackTimer > 0) {
         float alpha = score.hitFeedbackTimer / 0.5f * 180;
         if (score.lastHitGood) {
-            SDL_SetRenderDrawColor(r, 255, 255, 255, (Uint8)alpha);
+            SDL_SetRenderDrawColor(r, 255, 150, 150, (Uint8)alpha);
         } else {
             SDL_SetRenderDrawColor(r, 255, 50, 50, (Uint8)alpha);
         }
         SDL_Rect flashRect = {barX - 4, barY - 4, SCORE_BAR_W + 8, SCORE_BAR_H + 8};
         SDL_RenderDrawRect(r, &flashRect);
     }
-
-    int scoreNum = (int)score.displayScore;
-    int digitW = 8;
-    int digitH = 14;
-    int scoreTextY = barY + SCORE_BAR_H + 6;
-    int scoreTextX = barX + SCORE_BAR_W;
-    drawNumber(r, scoreNum, scoreTextX, scoreTextY, digitW, digitH, 255);
 }
