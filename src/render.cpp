@@ -45,19 +45,16 @@ static constexpr float SWORD_IDLE_SWAY_FREQ = 2.0f;
 static constexpr float SWORD_IDLE_SMOOTH_SPEED = 6.0f;
 static constexpr float SWORD_CHARGE_SPEED = 18.0f;
 static constexpr float SWORD_SLASH_SPEED = 28.0f;
-static constexpr float SWORD_RECOVER_SPEED = 10.0f;
-static constexpr float CHAIN_WINDOW = 0.20f;
 static constexpr float ANGLE_ROTATION_SPEED = 12.0f;
 static constexpr float CAMERA_FOLLOW_SPEED = 5.0f;
 static constexpr float CAMERA_ZOOM_SPEED = 4.0f;
-static constexpr float RIBBON_LIFETIME_IDLE = 0.3f;
-static constexpr float RIBBON_LIFETIME_CHARGE = 0.35f;
-static constexpr float RIBBON_LIFETIME_SLASH = 0.7f;
-static constexpr float RIBBON_LIFETIME_RECOVER = 0.4f;
+static constexpr float RIBBON_LIFETIME_IDLE = 0.6f;
+static constexpr float RIBBON_LIFETIME_CHARGE = 0.7f;
+static constexpr float RIBBON_LIFETIME_SLASH = 1.4f;
+static constexpr float FLASH_DURATION = 0.15f;
 static constexpr int RIBBON_SEGMENTS_IDLE = 3;
 static constexpr int RIBBON_SEGMENTS_CHARGE = 5;
 static constexpr int RIBBON_SEGMENTS_SLASH = 20;
-static constexpr int RIBBON_SEGMENTS_RECOVER = 6;
 static constexpr float SWORD_LENGTH = 115.0f;
 
 // --- Player render constants ---
@@ -158,9 +155,6 @@ void updateAnimations(GameState& game, float dt) {
         g_swordAnim.lastAttackEndOffset = game.player.swordOffset;
     }
 
-    float timeSinceLand = game.gameTime - g_swordAnim.landTime;
-    bool canChain = timeSinceLand < CHAIN_WINDOW;
-
     // --- Unified attack progress (0.0 = start, 1.0 = end) ---
     float attackProgress = 0.0f;
     if (game.player.jumping) {
@@ -170,14 +164,9 @@ void updateAnimations(GameState& game, float dt) {
 
     // --- Direction init (once per jump) ---
     if (justStartedJump) {
-        float currentOffset = canChain ? g_swordAnim.lastAttackEndOffset : game.player.swordOffset;
-        float normalized = angleDiff(currentOffset, 0.0f);
+        g_swordAnim.chargeStartOffset = g_swordAnim.lastAttackEndOffset;
+        float normalized = angleDiff(g_swordAnim.lastAttackEndOffset, 0.0f);
         g_swordAnim.slashFromLeft = normalized > 0.0f;
-        g_swordAnim.chargeStartOffset = game.player.swordOffset;
-
-        if (canChain && fabsf(g_swordAnim.lastAttackEndOffset) > 0.3f) {
-            g_swordAnim.chargeStartOffset = g_swordAnim.lastAttackEndOffset;
-        }
     }
 
     // --- Derive phase from unified progress ---
@@ -228,8 +217,7 @@ void updateAnimations(GameState& game, float dt) {
 
     float targetSwordOffset;
     if (g_swordAnim.phase == SwordPhase::IDLE) {
-        float sway = sinf(game.gameTime * SWORD_IDLE_SWAY_FREQ) * SWORD_IDLE_SWAY_AMP;
-        targetSwordOffset = SWORD_IDLE_BASE_ANGLE + sway;
+        targetSwordOffset = g_swordAnim.lastAttackEndOffset;
     } else if (g_swordAnim.phase == SwordPhase::CHARGE) {
         // Charge: sword held at windup position on character's back
         // No arc — just ensure it's at the back; smooth speed handles transition
@@ -237,11 +225,8 @@ void updateAnimations(GameState& game, float dt) {
     } else if (g_swordAnim.phase == SwordPhase::SLASH) {
         float t = easeOutCubic(phaseProgress);
         targetSwordOffset = windupOffset + (endOffset - windupOffset) * t;
-    } else { // RECOVER
-        float t = easeOutQuad(phaseProgress);
-        // Shortest path back to idle (through the back, never through front)
-        float diffToIdle = angleDiff(SWORD_IDLE_BASE_ANGLE, endOffset);
-        targetSwordOffset = endOffset + diffToIdle * t;
+    } else { // RECOVER - hold at end position, no return animation
+        targetSwordOffset = endOffset;
     }
 
     // Smooth interpolation to target
@@ -251,8 +236,6 @@ void updateAnimations(GameState& game, float dt) {
         speed = SWORD_SLASH_SPEED;
     } else if (g_swordAnim.phase == SwordPhase::CHARGE) {
         speed = SWORD_CHARGE_SPEED;
-    } else if (g_swordAnim.phase == SwordPhase::RECOVER) {
-        speed = SWORD_RECOVER_SPEED;
     } else {
         speed = SWORD_IDLE_SMOOTH_SPEED;
     }
@@ -265,11 +248,9 @@ void updateAnimations(GameState& game, float dt) {
         }
     }
 
-    // Smooth player angle rotation
-    Vec2 moveDir = game.player.pos - game.player.jumpStart;
-    if (game.player.jumping && moveDir.len() > 0.01f) {
-        float targetAngle = atan2f(moveDir.y, moveDir.x);
-        float ad = angleDiff(targetAngle, game.player.angle);
+    // Smooth player angle rotation toward target enemy
+    if (game.player.jumping) {
+        float ad = angleDiff(game.player.targetAngle, game.player.angle);
         game.player.angle += ad * dt * ANGLE_ROTATION_SPEED;
     }
 
@@ -303,9 +284,9 @@ void updateAnimations(GameState& game, float dt) {
             ribbonIntensity = 1.0f;
             break;
         case SwordPhase::RECOVER:
-            segments = RIBBON_SEGMENTS_RECOVER;
-            ribbonLifetime = RIBBON_LIFETIME_RECOVER;
-            ribbonIntensity = 0.6f;
+            segments = 0;
+            ribbonLifetime = 0.0f;
+            ribbonIntensity = 0.0f;
             break;
         default:
             segments = RIBBON_SEGMENTS_IDLE;
@@ -572,7 +553,7 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
             
             // Interpolate between stored ribbon positions for smooth curves
             // More steps for high-intensity phases (slash)
-            int interpSteps = (curr.gradient > 0.8f) ? 6 : (curr.gradient > 0.5f ? 3 : 1);
+            int interpSteps = (curr.gradient > 0.8f) ? 2 : 1;
             Vec2 lastBase = prevBase;
             Vec2 lastTip = prevTip;
             
@@ -593,10 +574,20 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
         
         // Enemies
         for (const auto& e : game.enemies) {
-            if (!e.alive) continue;
+            if (!e.alive && e.flashTimer <= 0 && e.blowAwayTimer <= 0) continue;
             Vec2 s = getWorldToScreen(game, e.pos, w, h);
             float rad = e.radius * game.camera.zoom;
-            Uint8 a = e.flashTimer > 0 ? 255 : (e.beingBlown ? 255 : baseAlpha);
+            Uint8 a;
+            if (!e.alive) {
+                if (e.flashTimer > 0) {
+                    float flashRatio = e.flashTimer / FLASH_DURATION;
+                    a = (Uint8)(255 * flashRatio);
+                } else {
+                    a = (Uint8)(baseAlpha * 0.5f);
+                }
+            } else {
+                a = e.flashTimer > 0 ? 255 : (e.beingBlown ? 255 : baseAlpha);
+            }
             drawEnemy(r->renderer, s.x, s.y, rad, a);
         }
         

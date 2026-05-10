@@ -94,6 +94,7 @@ Player::Player()
     , hasSlashed(false)
     , swordAngleOffset(0)
     , swordCategory(SwordCategory::Default)
+    , targetAngle(0)
 {}
 
 void Player::reset() {
@@ -108,6 +109,7 @@ void Player::reset() {
     swordRibbons.clear();
     swordAngleOffset = 0;
     swordCategory = SwordCategory::Default;
+    targetAngle = 0;
 }
 
 Enemy::Enemy()
@@ -388,7 +390,7 @@ void processAttack(GameState& game, const Timeline& timeline, const InputState& 
     if (target >= 0) {
         Vec2 enemyPos = game.enemies[target].pos;
         game.targetEnemy = target;
-        game.player.angle = atan2f(enemyPos.y - game.player.pos.y, enemyPos.x - game.player.pos.x);
+        game.player.targetAngle = atan2f(enemyPos.y - game.player.pos.y, enemyPos.x - game.player.pos.x);
         Vec2 dir = (enemyPos - game.player.pos).normalized();
         game.player.jumpStart = game.player.pos;
         game.player.jumpTarget = enemyPos - dir * (SWORD_LENGTH * 0.5f);
@@ -440,6 +442,15 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
 
     // Combat: slash detection
     if (game.player.jumping && game.player.hasSlashed) {
+        // Kill target enemy on slash
+        if (game.targetEnemy >= 0 && game.targetEnemy < (int)game.enemies.size() &&
+            game.enemies[game.targetEnemy].alive) {
+            float finalSwordAngle = game.player.angle + game.player.swordOffset;
+            blowAwayEnemies(game, game.enemies[game.targetEnemy].pos, finalSwordAngle, game.player.swordCategory);
+            game.enemies[game.targetEnemy].alive = false;
+            game.enemies[game.targetEnemy].flashTimer = FLASH_DURATION;
+        }
+        
         float swordAngle = game.player.angle + game.player.swordOffset;
         Vec2 swordTip(
             game.player.pos.x + cosf(swordAngle) * SWORD_LENGTH,
@@ -461,36 +472,41 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
     if (game.player.jumping && game.player.jumpTimer <= 0) {
         game.player.jumping = false;
         game.player.pos = game.player.jumpTarget;
-        if (game.targetEnemy >= 0 && game.targetEnemy < (int)game.enemies.size() &&
-            game.enemies[game.targetEnemy].alive) {
-            float finalSwordAngle = game.player.angle + game.player.swordOffset;
-            blowAwayEnemies(game, game.enemies[game.targetEnemy].pos, finalSwordAngle, game.player.swordCategory);
-            game.enemies[game.targetEnemy].alive = false;
-            game.enemies[game.targetEnemy].flashTimer = FLASH_DURATION;
-        }
         game.targetEnemy = -1;
         game.player.hasSlashed = false;
     }
 
     // Enemy AI movement
     for (auto& e : game.enemies) {
-        if (!e.alive) continue;
-        if (e.beingBlown && e.blowAwayTimer > 0) {
-            e.blowAwayTimer -= dt;
-            e.pos = e.pos + e.blowAwayVel * dt;
-            e.blowAwayVel = e.blowAwayVel * (1.0f - dt * BLOW_FRICTION);
-            if (e.blowAwayTimer <= 0) {
-                e.beingBlown = false;
-                e.blowAwayVel = Vec2(0, 0);
+        if (e.alive) {
+            if (e.beingBlown && e.blowAwayTimer > 0) {
+                e.blowAwayTimer -= dt;
+                e.pos = e.pos + e.blowAwayVel * dt;
+                e.blowAwayVel = e.blowAwayVel * (1.0f - dt * BLOW_FRICTION);
+                if (e.blowAwayTimer <= 0) {
+                    e.beingBlown = false;
+                    e.blowAwayVel = Vec2(0, 0);
+                }
+            } else {
+                float rhythmSpeed = e.baseSpeed * (ENEMY_RHYTHM_MIN + gradient * ENEMY_RHYTHM_MAX);
+                Vec2 toPlayer = (game.player.pos - e.pos).normalized();
+                e.vel.x += toPlayer.x * ENEMY_ACCEL * rhythmSpeed;
+                e.vel.y += toPlayer.y * ENEMY_ACCEL * rhythmSpeed;
+                float speed = e.vel.len();
+                if (speed > rhythmSpeed * ENEMY_SPEED_SCALE) e.vel = e.vel.normalized() * rhythmSpeed * ENEMY_SPEED_SCALE;
+                e.pos = e.pos + e.vel * dt * ENEMY_SPEED_PX_PER_SEC;
             }
         } else {
-            float rhythmSpeed = e.baseSpeed * (ENEMY_RHYTHM_MIN + gradient * ENEMY_RHYTHM_MAX);
-            Vec2 toPlayer = (game.player.pos - e.pos).normalized();
-            e.vel.x += toPlayer.x * ENEMY_ACCEL * rhythmSpeed;
-            e.vel.y += toPlayer.y * ENEMY_ACCEL * rhythmSpeed;
-            float speed = e.vel.len();
-            if (speed > rhythmSpeed * ENEMY_SPEED_SCALE) e.vel = e.vel.normalized() * rhythmSpeed * ENEMY_SPEED_SCALE;
-            e.pos = e.pos + e.vel * dt * ENEMY_SPEED_PX_PER_SEC;
+            // Dead enemies: continue blow-away physics
+            if (e.beingBlown && e.blowAwayTimer > 0) {
+                e.blowAwayTimer -= dt;
+                e.pos = e.pos + e.blowAwayVel * dt;
+                e.blowAwayVel = e.blowAwayVel * (1.0f - dt * BLOW_FRICTION);
+                if (e.blowAwayTimer <= 0) {
+                    e.beingBlown = false;
+                    e.blowAwayVel = Vec2(0, 0);
+                }
+            }
         }
         if (e.flashTimer > 0) e.flashTimer -= dt;
     }

@@ -80,6 +80,7 @@ struct Player : GameObject {
     std::vector<SwordRibbon> swordRibbons;
     float swordAngleOffset;  // Added by WASD during slash
     SwordCategory swordCategory;
+    float targetAngle;       // Smooth rotation target during jumps
     
     Player();
     void reset();
