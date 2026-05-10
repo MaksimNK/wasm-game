@@ -19,7 +19,11 @@ C++ music visualizer that analyzes MP3 audio via FFT and renders a real-time wav
 ```
 src/main.cpp      - SDL2 init, render loop, audio callback
 src/audio.cpp     - MP3 decode + FFT analysis pipeline
+src/game.cpp      - Game state management, input handling
+src/render.cpp    - Waveform rendering, fisheye distortion, visual effects
 include/audio.hpp - AudioDecoder, Timeline structs
+include/game.hpp  - Game state, input enums
+include/render.hpp - Render constants, draw helpers
 ```
 
 ### Data Flow
@@ -172,20 +176,29 @@ Modify `0.8f + (rand() / RAND_MAX) * 0.4f` for different ranges.
 src/
   main.cpp       - Entry point, SDL loop, renderer
   audio.cpp      - Decoder, FFT, analysis pipeline
+  game.cpp       - Game state management, input handling
+  render.cpp     - Waveform rendering, fisheye distortion, visual effects
 include/
   audio.hpp      - AudioDecoder, Timeline structs
+  game.hpp       - Game state, input enums
+  render.hpp     - Render constants, draw helpers
 deps/
   minimp3.h      - MP3 decoder (auto-fetched)
   minimp3_ex.h
   kiss_fft.h     - FFT library (auto-fetched)
   kiss_fft.c
+  _kiss_fft_guts.h
+  kiss_fft_log.h
 out/
   index.html     - HTML shell for WASM
   game.js        - Generated JS glue
   game.wasm      - Generated binary
+  game.data      - Preloaded audio assets
 audio/
   test.mp3       - Default test audio
+  test-1.mp3     - Additional test audio
 devbox.json      - Devbox configuration (dependencies + scripts)
+devbox.lock      - Lock file for reproducible builds
 ```
 
 ---
