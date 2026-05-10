@@ -2,6 +2,7 @@
 #include <SDL.h>
 #include <cmath>
 #include <algorithm>
+#include <cstdio>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -65,6 +66,10 @@ static constexpr float CIRCLE_INNER_RATIO = 0.6f;
 // --- Window constants ---
 static constexpr Uint32 WINDOW_FLAGS_NATIVE = SDL_WINDOW_RESIZABLE;
 static constexpr Uint32 WINDOW_FLAGS_EMSCRIPTEN = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE;
+
+// --- Forward declarations (score system additions at end of file) ---
+static void updateScoreAnimations(ScoreSystem& sc, float dt);
+static void drawScoreBar(SDL_Renderer* r, int screenW, int screenH, const ScoreSystem& score);
 
 // --- Animation helpers ---
 
@@ -147,6 +152,14 @@ void updateAnimations(GameState& game, float dt) {
             [](const SwordRibbon& r) { return r.lifetime <= 0; }),
         game.player.swordRibbons.end()
     );
+
+    // Hit feedback timer
+    if (game.score.hitFeedbackTimer > 0) {
+        game.score.hitFeedbackTimer -= dt;
+    }
+
+    // Score display smooth animation
+    updateScoreAnimations(game.score, dt);
 }
 
 // --- Renderer implementation ---
@@ -398,6 +411,9 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
         // Sword
         Uint8 swordAlpha = game.player.jumping ? 255 : (Uint8)(baseAlpha * 0.9f);
         drawSword(r->renderer, ps.x, ps.y, game.player.angle + game.player.swordOffset, swordAlpha);
+        
+        // Score bar
+        drawScoreBar(r->renderer, w, h, game.score);
     }
     
     // Progress bar (always rendered)
@@ -466,4 +482,121 @@ bool pollEvents(GameState& game, const Timeline& timeline, bool& attack, bool& s
         }
     }
     return true;
+}
+
+// ============================================================================
+// SCORE SYSTEM ADDITIONS - All new code below to minimize merge conflicts
+// ============================================================================
+
+// --- Score bar constants ---
+static constexpr int SCORE_BAR_W = 200;
+static constexpr int SCORE_BAR_H = 20;
+static constexpr int SCORE_BAR_MARGIN = 20;
+
+// --- Score animation ---
+static void updateScoreAnimations(ScoreSystem& sc, float dt) {
+    float scoreSpeed = 8.0f;
+    float fillSpeed = 6.0f;
+    float levelSpeed = 4.0f;
+
+    sc.displayScore += (sc.score - sc.displayScore) * dt * scoreSpeed;
+    sc.displayScaleFill += (sc.scaleFill - sc.displayScaleFill) * dt * fillSpeed;
+
+    if (sc.level != sc.displayLevel) {
+        sc.levelAnimTimer += dt * levelSpeed;
+        if (sc.levelAnimTimer >= 1.0f) {
+            sc.displayLevel = sc.level;
+            sc.levelAnimTimer = 0.0f;
+        }
+    }
+}
+
+// --- 7-segment digit drawing ---
+static void drawDigit(SDL_Renderer* r, int digit, int x, int y, int w, int h, Uint8 alpha) {
+    static const int segments[10] = {
+        0b1110111, // 0
+        0b0010010, // 1
+        0b1011101, // 2
+        0b1011011, // 3
+        0b0111010, // 4
+        0b1101011, // 5
+        0b1101111, // 6
+        0b1010010, // 7
+        0b1111111, // 8
+        0b1111011, // 9
+    };
+    int seg = segments[digit % 10];
+    int sw = w / 5;
+    int sh = h / 8;
+    int mw = w / 2;
+    int mh = h / 2;
+    SDL_SetRenderDrawColor(r, 255, 255, 255, alpha);
+    if (seg & 0b1000000) SDL_RenderDrawLine(r, x + sw, y, x + w - sw, y);
+    if (seg & 0b0100000) SDL_RenderDrawLine(r, x, y + sh, x, y + mh - sh);
+    if (seg & 0b0010000) SDL_RenderDrawLine(r, x + w, y + sh, x + w, y + mh - sh);
+    if (seg & 0b0001000) SDL_RenderDrawLine(r, x + sw, y + mh, x + w - sw, y + mh);
+    if (seg & 0b0000100) SDL_RenderDrawLine(r, x, y + mh + sh, x, y + h - sh);
+    if (seg & 0b0000010) SDL_RenderDrawLine(r, x + w, y + mh + sh, x + w, y + h - sh);
+    if (seg & 0b0000001) SDL_RenderDrawLine(r, x + sw, y + h, x + w - sw, y + h);
+}
+
+static void drawNumber(SDL_Renderer* r, int number, int x, int y, int digitW, int digitH, Uint8 alpha) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", number);
+    int len = 0;
+    while (buf[len]) len++;
+    int totalW = len * digitW + (len - 1) * 4;
+    int startX = x - totalW;
+    for (int i = 0; i < len; i++) {
+        drawDigit(r, buf[i] - '0', startX + i * (digitW + 4), y, digitW, digitH, alpha);
+    }
+}
+
+// --- Score bar rendering ---
+static void drawScoreBar(SDL_Renderer* r, int screenW, int screenH, const ScoreSystem& score) {
+    int barX = SCORE_BAR_MARGIN;
+    int barY = (int)((screenH - BAR_H) / BAR_Y_RATIO) - SCORE_BAR_H - 8;
+
+    SDL_Rect bgRect = {barX, barY, SCORE_BAR_W, SCORE_BAR_H};
+    SDL_SetRenderDrawColor(r, 20, 20, 20, 230);
+    SDL_RenderFillRect(r, &bgRect);
+
+    int fillW = (int)(SCORE_BAR_W * score.displayScaleFill);
+    if (fillW > 0) {
+        Uint8 r_val, g_val, b_val;
+        int displayLvl = score.displayLevel;
+        if (displayLvl == 0) { r_val = 255; g_val = 255; b_val = 255; }
+        else if (displayLvl == 1) { r_val = 0; g_val = 255; b_val = 255; }
+        else if (displayLvl == 2) { r_val = 255; g_val = 0; b_val = 255; }
+        else { r_val = 255; g_val = 215; b_val = 0; }
+
+        SDL_SetRenderDrawColor(r, r_val, g_val, b_val, 255);
+        SDL_Rect fillRect = {barX, barY, fillW, SCORE_BAR_H};
+        SDL_RenderFillRect(r, &fillRect);
+    }
+
+    SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
+    SDL_RenderDrawRect(r, &bgRect);
+
+    SDL_SetRenderDrawColor(r, 180, 180, 180, 255);
+    SDL_Rect borderRect = {barX - 2, barY - 2, SCORE_BAR_W + 4, SCORE_BAR_H + 4};
+    SDL_RenderDrawRect(r, &borderRect);
+
+    if (score.hitFeedbackTimer > 0) {
+        float alpha = score.hitFeedbackTimer / 0.5f * 180;
+        if (score.lastHitGood) {
+            SDL_SetRenderDrawColor(r, 255, 255, 255, (Uint8)alpha);
+        } else {
+            SDL_SetRenderDrawColor(r, 255, 50, 50, (Uint8)alpha);
+        }
+        SDL_Rect flashRect = {barX - 4, barY - 4, SCORE_BAR_W + 8, SCORE_BAR_H + 8};
+        SDL_RenderDrawRect(r, &flashRect);
+    }
+
+    int scoreNum = (int)score.displayScore;
+    int digitW = 8;
+    int digitH = 14;
+    int scoreTextY = barY + SCORE_BAR_H + 6;
+    int scoreTextX = barX + SCORE_BAR_W;
+    drawNumber(r, scoreNum, scoreTextX, scoreTextY, digitW, digitH, 255);
 }

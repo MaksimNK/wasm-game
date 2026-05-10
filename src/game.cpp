@@ -67,6 +67,17 @@ static constexpr float ZOOM_JUMP = 1.15f;
 static constexpr float SCREEN_CENTER_X = 0.5f;
 static constexpr float SCREEN_CENTER_Y = 0.45f;
 
+// --- Score constants ---
+static constexpr float TIMING_THRESHOLD = 0.6f;
+static constexpr int BASE_HIT_POINTS = 100;
+static constexpr float FILL_PER_HIT = 0.15f;
+static constexpr float MISS_FILL_PENALTY = 0.10f;
+static constexpr float LEVEL_MULTIPLIER = 0.1f;
+static constexpr float MISS_PENALTY_1 = 0.2f;
+static constexpr float MISS_PENALTY_2 = 0.5f;
+static constexpr float MISS_PENALTY_3 = 0.75f;
+static constexpr float MISS_PENALTY_4 = 0.9f;
+
 // --- Easing bezier control points for jump ---
 static const Vec2 JUMP_EASE_P0(0.0f, 0.0f);
 static const Vec2 JUMP_EASE_P1(0.42f, 0.0f);
@@ -120,6 +131,34 @@ void Enemy::reset() {
     beingBlown = false;
 }
 
+ScoreSystem::ScoreSystem()
+    : score(0)
+    , level(0)
+    , combo(0)
+    , consecutiveMisses(0)
+    , scaleFill(0.0f)
+    , lastHitGood(false)
+    , hitFeedbackTimer(0.0f)
+    , displayScore(0.0f)
+    , displayScaleFill(0.0f)
+    , displayLevel(0)
+    , levelAnimTimer(0.0f)
+{}
+
+void ScoreSystem::reset() {
+    score = 0;
+    level = 0;
+    combo = 0;
+    consecutiveMisses = 0;
+    scaleFill = 0.0f;
+    lastHitGood = false;
+    hitFeedbackTimer = 0.0f;
+    displayScore = 0.0f;
+    displayScaleFill = 0.0f;
+    displayLevel = 0;
+    levelAnimTimer = 0.0f;
+}
+
 float getBrightnessAtTime(const Timeline& timeline, float time) {
     if (timeline.gradient.empty()) return 0.0f;
     int idx = (int)(time * timeline.fps);
@@ -164,6 +203,46 @@ void initGame(GameState& game, int screenW, int screenH) {
     game.enemies.clear();
     game.maxEnemies = MAX_ENEMIES;
     game.targetEnemy = -1;
+    game.score.reset();
+}
+
+bool isGoodTiming(const Timeline& timeline, float musicTime) {
+    float gradient = getBrightnessAtTime(timeline, musicTime);
+    return gradient >= TIMING_THRESHOLD;
+}
+
+void processScoreHit(GameState& game, bool goodTiming) {
+    ScoreSystem& s = game.score;
+    
+    if (goodTiming) {
+        int points = (int)(BASE_HIT_POINTS * (1.0f + s.level * LEVEL_MULTIPLIER));
+        s.score += points * (1 + s.combo);
+        s.scaleFill += FILL_PER_HIT;
+        s.combo++;
+        s.consecutiveMisses = 0;
+        s.lastHitGood = true;
+        s.hitFeedbackTimer = 0.5f;
+        
+        if (s.scaleFill >= 1.0f) {
+            s.scaleFill = 0.0f;
+            s.level++;
+            s.combo = 0;
+        }
+    } else {
+        float penalty;
+        if (s.consecutiveMisses == 0) penalty = MISS_PENALTY_1;
+        else if (s.consecutiveMisses == 1) penalty = MISS_PENALTY_2;
+        else if (s.consecutiveMisses == 2) penalty = MISS_PENALTY_3;
+        else penalty = MISS_PENALTY_4;
+
+        s.score = (int)(s.score * penalty);
+        s.scaleFill -= MISS_FILL_PENALTY;
+        if (s.scaleFill < 0.0f) s.scaleFill = 0.0f;
+        s.combo = 0;
+        s.consecutiveMisses++;
+        s.lastHitGood = false;
+        s.hitFeedbackTimer = 0.5f;
+    }
 }
 
 static int findNearestEnemy(const GameState& game) {

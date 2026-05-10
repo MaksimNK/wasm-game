@@ -72,6 +72,23 @@ struct Camera {
     float zoom;
 };
 
+struct ScoreSystem {
+    int score;
+    int level;
+    int combo;
+    int consecutiveMisses;
+    float scaleFill;
+    bool lastHitGood;
+    float hitFeedbackTimer;
+    float displayScore;
+    float displayScaleFill;
+    int displayLevel;
+    float levelAnimTimer;
+
+    ScoreSystem();
+    void reset();
+};
+
 struct GameState {
     Player player;
     Camera camera;
@@ -83,6 +100,7 @@ struct GameState {
     float spawnTimer;
     int maxEnemies;
     int targetEnemy;
+    ScoreSystem score;
 };
 
 float getBrightnessAtTime(const Timeline& timeline, float time);
@@ -91,3 +109,6 @@ void initGame(GameState& game, int screenW, int screenH);
 void updateGame(GameState& game, const Timeline& timeline, float realDt, float musicTime);
 void processAttack(GameState& game, const Timeline& timeline);
 Vec2 getWorldToScreen(const GameState& game, const Vec2& worldPos, int screenW, int screenH);
+
+bool isGoodTiming(const Timeline& timeline, float musicTime);
+void processScoreHit(GameState& game, bool goodTiming);
