@@ -54,6 +54,8 @@ Thumbs.db
 vendor/
 node_modules/
 
+# Emscripten cache
+.emscripten_cache/
 
 spec/
 

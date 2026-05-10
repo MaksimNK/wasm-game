@@ -44,20 +44,46 @@ MP3 → minimp3 → PCM float → KissFFT STFT → brightness vector → SDL2 re
 
 ---
 
-## Build System
+## Build System (Devbox)
+
+This project uses [Devbox](https://www.jetpack.io/devbox) for reproducible development environments. All dependencies are managed through `devbox.json`.
 
 ```bash
-# Native (macOS/Linux with SDL2)
-./build.sh
+# Enter the dev environment
+devbox shell
 
-# WebAssembly (requires Emscripten)
-./build.sh wasm
-./build_and_run.sh  # Build + server + browser
+# Or run commands directly
+devbox run <script>
 ```
 
-**Dependencies:**
-- Native: SDL2, Clang/Clang++
-- Auto-fetched: minimp3, KissFFT (via `fetch_deps.sh`)
+**Available Scripts:**
+
+| Command | Description |
+|---------|-------------|
+| `devbox run fetch-deps` | Download minimp3 + KissFFT into `deps/` |
+| `devbox run build-native` | Compile desktop binary with clang++ |
+| `devbox run build-wasm` | Compile WebAssembly with emcc |
+| `devbox run build-and-run` | Full wasm workflow: clean → build → serve → open browser |
+| `devbox run clean` | Remove build artifacts |
+| `devbox run run` | Build (if needed) and run native binary |
+
+**Example workflows:**
+```bash
+# Native development
+devbox run build-native
+devbox run run
+
+# WebAssembly development
+devbox run build-and-run
+```
+
+**Managed Dependencies:**
+- `clang` — C++ compiler
+- `SDL2` — Graphics/audio library
+- `emscripten` — WebAssembly toolchain
+- `python3` — Built-in HTTP server
+- `curl` — Download dependencies
+- `lsof` — Port management
 
 ---
 
@@ -159,9 +185,7 @@ out/
   game.wasm      - Generated binary
 audio/
   test.mp3       - Default test audio
-build.sh         - Build script (native/wasm)
-build_and_run.sh - Full dev workflow
-fetch_deps.sh    - Download dependencies
+devbox.json      - Devbox configuration (dependencies + scripts)
 ```
 
 ---
@@ -169,10 +193,10 @@ fetch_deps.sh    - Download dependencies
 ## Testing Checklist
 
 When making changes, verify:
-- [ ] `./build.sh` compiles native binary
-- [ ] `./build.sh wasm` compiles WASM
-- [ ] Native: `./game audio/test.mp3` runs
-- [ ] WASM: `./build_and_run.sh` opens browser
+- [ ] `devbox run build-native` compiles native binary
+- [ ] `devbox run build-wasm` compiles WASM
+- [ ] Native: `devbox run run` executes successfully
+- [ ] WASM: `devbox run build-and-run` opens browser
 - [ ] Visuals appear on black background
 - [ ] Playhead moves smoothly
 - [ ] Waveform responds to audio
