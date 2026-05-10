@@ -24,6 +24,29 @@ struct SwordRibbon {
     float gradient;
 };
 
+// --- Input State ---
+
+struct InputState {
+    bool w;
+    bool a;
+    bool s;
+    bool d;
+    
+    InputState() : w(false), a(false), s(false), d(false) {}
+    
+    bool any() const { return w || a || s || d; }
+    
+    float aimAngle() const {
+        float dx = 0.0f, dy = 0.0f;
+        if (a) dx -= 1.0f;
+        if (d) dx += 1.0f;
+        if (w) dy -= 1.0f;
+        if (s) dy += 1.0f;
+        if (dx == 0.0f && dy == 0.0f) return -999.0f;
+        return atan2f(dy, dx);
+    }
+};
+
 // --- Game Object Hierarchy ---
 
 // Base class for all game entities
@@ -34,6 +57,14 @@ struct GameObject {
     
     GameObject() : pos(0, 0), angle(0), active(true) {}
     virtual ~GameObject() = default;
+};
+
+// Sword direction categories for blowAway shape
+enum class SwordCategory {
+    Default,    // No WASD — radial blowAway
+    Vertical,   // W or S — narrow cone, long range
+    Horizontal, // A or D — wide arc, short range
+    Diagonal    // Combinations — medium cone, medium range
 };
 
 // Player entity
@@ -47,6 +78,8 @@ struct Player : GameObject {
     float swordOffset;
     bool hasSlashed;
     std::vector<SwordRibbon> swordRibbons;
+    float swordAngleOffset;  // Added by WASD during slash
+    SwordCategory swordCategory;
     
     Player();
     void reset();
@@ -107,7 +140,7 @@ float getBrightnessAtTime(const Timeline& timeline, float time);
 float getTimeScale(float brightness);
 void initGame(GameState& game, int screenW, int screenH);
 void updateGame(GameState& game, const Timeline& timeline, float realDt, float musicTime);
-void processAttack(GameState& game, const Timeline& timeline);
+void processAttack(GameState& game, const Timeline& timeline, const InputState& input);
 Vec2 getWorldToScreen(const GameState& game, const Vec2& worldPos, int screenW, int screenH);
 
 bool isGoodTiming(const Timeline& timeline, float musicTime);

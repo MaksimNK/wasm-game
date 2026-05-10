@@ -101,6 +101,16 @@ void updateAnimations(GameState& game, float dt) {
             slashProgress = slashProgress < 0.0f ? 0.0f : (slashProgress > 1.0f ? 1.0f : slashProgress);
             float t = slashProgress * slashProgress;
             targetSwordOffset = SWORD_WINDUP_ANGLE + (SWORD_SLASH_END_ANGLE - SWORD_WINDUP_ANGLE) * t;
+            
+            // Apply WASD sword angle offset during slash phase
+            if (game.player.swordCategory != SwordCategory::Default) {
+                // swordAngleOffset is stored as absolute aim angle
+                // Convert to offset relative to player facing angle (jump direction)
+                float baseAngle = game.player.angle;
+                float aimAngle = game.player.swordAngleOffset;
+                float relativeOffset = angleDiff(aimAngle, baseAngle);
+                targetSwordOffset += relativeOffset;
+            }
         }
     } else {
         targetSwordOffset = sinf(game.gameTime * SWORD_IDLE_FREQ) * SWORD_IDLE_AMP;
@@ -464,7 +474,7 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
     SDL_RenderPresent(r->renderer);
 }
 
-bool pollEvents(GameState& game, const Timeline& timeline, bool& attack, bool& start) {
+bool pollEvents(GameState& game, const Timeline& timeline, bool& attack, bool& start, InputState& input) {
     attack = false;
     start = false;
     
@@ -481,6 +491,14 @@ bool pollEvents(GameState& game, const Timeline& timeline, bool& attack, bool& s
             start = true;
         }
     }
+    
+    // Read current keyboard state for WASD
+    const Uint8* keystate = SDL_GetKeyboardState(nullptr);
+    input.w = keystate[SDL_SCANCODE_W];
+    input.a = keystate[SDL_SCANCODE_A];
+    input.s = keystate[SDL_SCANCODE_S];
+    input.d = keystate[SDL_SCANCODE_D];
+    
     return true;
 }
 

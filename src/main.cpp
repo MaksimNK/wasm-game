@@ -53,8 +53,9 @@ static void startAudio() {
 static bool step() {
     bool attack = false;
     bool start = false;
+    InputState input;
     
-    if (!pollEvents(g_game, g_timeline, attack, start)) {
+    if (!pollEvents(g_game, g_timeline, attack, start, input)) {
         return false;
     }
     
@@ -65,7 +66,7 @@ static bool step() {
         } else {
             bool goodTiming = isGoodTiming(g_timeline, g_time);
             processScoreHit(g_game, goodTiming);
-            processAttack(g_game, g_timeline);
+            processAttack(g_game, g_timeline, input);
         }
     }
     

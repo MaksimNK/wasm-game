@@ -92,6 +92,8 @@ Player::Player()
     , jumpDuration(0.25f)
     , swordOffset(0)
     , hasSlashed(false)
+    , swordAngleOffset(0)
+    , swordCategory(SwordCategory::Default)
 {}
 
 void Player::reset() {
@@ -104,6 +106,8 @@ void Player::reset() {
     swordOffset = 0;
     hasSlashed = false;
     swordRibbons.clear();
+    swordAngleOffset = 0;
+    swordCategory = SwordCategory::Default;
 }
 
 Enemy::Enemy()
@@ -245,41 +249,6 @@ void processScoreHit(GameState& game, bool goodTiming) {
     }
 }
 
-float InputState::aimAngle() const {
-    float dx = 0.0f, dy = 0.0f;
-    if (a) dx -= 1.0f;
-    if (d) dx += 1.0f;
-    if (w) dy -= 1.0f;
-    if (s) dy += 1.0f;
-    if (dx == 0.0f && dy == 0.0f) return -999.0f;
-    return atan2f(dy, dx);
-}
-
-static int findEnemyInDirection(const GameState& game, float aimAngle, float sectorWidth) {
-    int best = -1;
-    float bestScore = 999999.0f;
-    float halfSector = sectorWidth * 0.5f;
-    
-    for (size_t i = 0; i < game.enemies.size(); i++) {
-        if (!game.enemies[i].alive) continue;
-        float dist = (game.enemies[i].pos - game.player.pos).len();
-        if (dist <= MIN_ATTACK_DIST) continue;
-        
-        float enemyAngle = atan2f(game.enemies[i].pos.y - game.player.pos.y,
-                                  game.enemies[i].pos.x - game.player.pos.x);
-        float diff = fabsf(atan2f(sinf(enemyAngle - aimAngle), cosf(enemyAngle - aimAngle)));
-        
-        if (diff <= halfSector) {
-            float score = dist * 0.5f + diff * 100.0f;
-            if (score < bestScore) {
-                bestScore = score;
-                best = (int)i;
-            }
-        }
-    }
-    return best;
-}
-
 static int findNearestEnemy(const GameState& game) {
     int nearest = -1;
     float minDist = 999999.0f;
@@ -301,14 +270,49 @@ static float angleDiff(float a, float b) {
     return diff;
 }
 
-static void blowAwayEnemies(GameState& game, Vec2 explosionPos) {
+static void blowAwayEnemies(GameState& game, Vec2 explosionPos, float swordAngle, SwordCategory category) {
+    float coneAngle = M_PI;           // Default: full radial
+    float rangeMult = 1.0f;
+    float forceMult = 1.0f;
+    
+    switch (category) {
+        case SwordCategory::Vertical:
+            coneAngle = M_PI / 3.0f;   // ~60 deg narrow cone
+            rangeMult = 1.5f;
+            forceMult = 1.2f;
+            break;
+        case SwordCategory::Horizontal:
+            coneAngle = M_PI * 1.2f;   // ~216 deg wide arc
+            rangeMult = 0.6f;
+            forceMult = 0.8f;
+            break;
+        case SwordCategory::Diagonal:
+            coneAngle = M_PI * 0.667f; // ~120 deg medium cone
+            rangeMult = 1.0f;
+            forceMult = 1.0f;
+            break;
+        default:
+            break;
+    }
+    
+    float halfCone = coneAngle * 0.5f;
+    float effectiveRadius = BLOW_RADIUS * rangeMult;
+    
     for (auto& e : game.enemies) {
         if (!e.alive) continue;
         Vec2 diff = e.pos - explosionPos;
         float dist = diff.len();
-        if (dist < BLOW_RADIUS && dist > 0.001f) {
+        if (dist < effectiveRadius && dist > 0.001f) {
             Vec2 dir = diff.normalized();
-            float force = (BLOW_RADIUS - dist) / BLOW_RADIUS * BLOW_MAX_ADDITIONAL_FORCE + BLOW_BASE_FORCE;
+            
+            // Check cone for non-default categories
+            if (category != SwordCategory::Default) {
+                float enemyAngle = atan2f(dir.y, dir.x);
+                float angleDelta = fabsf(atan2f(sinf(enemyAngle - swordAngle), cosf(enemyAngle - swordAngle)));
+                if (angleDelta > halfCone) continue;
+            }
+            
+            float force = (effectiveRadius - dist) / effectiveRadius * BLOW_MAX_ADDITIONAL_FORCE * forceMult + BLOW_BASE_FORCE * forceMult;
             e.blowAwayVel = dir * force;
             e.blowAwayTimer = BLOW_DURATION;
             e.beingBlown = true;
@@ -348,15 +352,39 @@ void processAttack(GameState& game, const Timeline& timeline, const InputState& 
     game.player.hasSlashed = false;
     game.player.jumpTimer = game.player.jumpDuration;
 
-    int target = -1;
-    float aim = input.aimAngle();
-    if (aim > -900.0f) {
-        target = findEnemyInDirection(game, aim, M_PI / 3.0f);
-    }
-    if (target < 0) {
-        target = findNearestEnemy(game);
+    // Calculate sword angle offset and category from WASD before jump
+    game.player.swordAngleOffset = 0.0f;
+    game.player.swordCategory = SwordCategory::Default;
+    
+    if (input.any()) {
+        float dx = 0.0f, dy = 0.0f;
+        if (input.a) dx -= 1.0f;
+        if (input.d) dx += 1.0f;
+        if (input.w) dy -= 1.0f;
+        if (input.s) dy += 1.0f;
+        
+        float aimAngle = atan2f(dy, dx);
+        
+        // Determine category based on input pattern
+        bool hasVertical = input.w || input.s;
+        bool hasHorizontal = input.a || input.d;
+        
+        if (hasVertical && hasHorizontal) {
+            game.player.swordCategory = SwordCategory::Diagonal;
+        } else if (hasVertical) {
+            game.player.swordCategory = SwordCategory::Vertical;
+        } else if (hasHorizontal) {
+            game.player.swordCategory = SwordCategory::Horizontal;
+        }
+        
+        // Convert aim angle to offset relative to jump direction
+        // aimAngle is in screen space: W=-PI/2, S=PI/2, A=PI, D=0
+        // We want offset relative to enemy direction (which will be game.player.angle)
+        // Store the absolute aim angle; offset applied in updateAnimations relative to jump angle
+        game.player.swordAngleOffset = aimAngle;
     }
 
+    int target = findNearestEnemy(game);
     if (target >= 0) {
         Vec2 enemyPos = game.enemies[target].pos;
         game.targetEnemy = target;
@@ -421,7 +449,8 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
             if (!e.alive) continue;
             float d = (e.pos - swordTip).len();
             if (d < e.radius + SWORD_HIT_EXTRA_RADIUS) {
-                blowAwayEnemies(game, e.pos);
+                float finalSwordAngle = game.player.angle + game.player.swordOffset;
+                blowAwayEnemies(game, e.pos, finalSwordAngle, game.player.swordCategory);
                 e.alive = false;
                 e.flashTimer = FLASH_DURATION;
             }
@@ -434,7 +463,8 @@ void updateGame(GameState& game, const Timeline& timeline, float realDt, float m
         game.player.pos = game.player.jumpTarget;
         if (game.targetEnemy >= 0 && game.targetEnemy < (int)game.enemies.size() &&
             game.enemies[game.targetEnemy].alive) {
-            blowAwayEnemies(game, game.enemies[game.targetEnemy].pos);
+            float finalSwordAngle = game.player.angle + game.player.swordOffset;
+            blowAwayEnemies(game, game.enemies[game.targetEnemy].pos, finalSwordAngle, game.player.swordCategory);
             game.enemies[game.targetEnemy].alive = false;
             game.enemies[game.targetEnemy].flashTimer = FLASH_DURATION;
         }
