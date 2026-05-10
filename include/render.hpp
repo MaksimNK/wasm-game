@@ -21,4 +21,4 @@ void renderFrame(Renderer* r, const GameState& game, const Timeline& timeline,
 
 // --- Input ---
 // Returns true if should quit
-bool pollEvents(GameState& game, const Timeline& timeline, bool& attack, bool& start);
+bool pollEvents(GameState& game, const Timeline& timeline, bool& attack, bool& start, InputState& input);

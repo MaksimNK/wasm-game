@@ -12,7 +12,7 @@
 
 // --- App constants ---
 static constexpr const char* APP_NAME = "Rhythm Slayer";
-static constexpr const char* DEFAULT_AUDIO_PATH = "audio/test.mp3";
+static constexpr const char* DEFAULT_AUDIO_PATH = "audio/test-2.mp3";
 static constexpr int DEFAULT_WIDTH = 800;
 static constexpr int DEFAULT_HEIGHT = 600;
 
@@ -53,8 +53,9 @@ static void startAudio() {
 static bool step() {
     bool attack = false;
     bool start = false;
+    InputState input;
     
-    if (!pollEvents(g_game, g_timeline, attack, start)) {
+    if (!pollEvents(g_game, g_timeline, attack, start, input)) {
         return false;
     }
     
@@ -63,7 +64,9 @@ static bool step() {
             startAudio();
             initGame(g_game, DEFAULT_WIDTH, DEFAULT_HEIGHT);
         } else {
-            processAttack(g_game, g_timeline);
+            bool goodTiming = isGoodTiming(g_timeline, g_time);
+            processScoreHit(g_game, goodTiming);
+            processAttack(g_game, g_timeline, input);
         }
     }
     
