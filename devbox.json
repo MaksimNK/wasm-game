@@ -41,7 +41,7 @@
         "busybox httpd -f -p 6931 -h out/"
       ],
       "clean": [
-        "rm -rf out/game.js out/game.wasm out/index.html out/game.data .emscripten_cache",
+        "rm -rf out/game.js out/game.wasm out/index.html out/game.data",
         "echo 'Cleaned.'"
       ]
     }
