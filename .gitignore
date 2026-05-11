@@ -1,18 +1,10 @@
-.vscode/
 *.code-workspace
-
-# Emscripten
 *.wasm
 *.js
 *.data
 .emscripten_cache/
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Build
 out/
-
-# Deps (optional — keep if you want hermetic builds)
-# deps/
+deps/
+audio/
