@@ -16,7 +16,7 @@ public:
 
 struct Timeline {
     std::vector<float> gradient;
-    float fps = 86.0f;
+    float sample_rate = 0.0f;
 };
 
 Timeline analyzeAudio(const std::vector<float>& audio, int sampleRate);

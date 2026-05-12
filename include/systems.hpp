@@ -24,6 +24,8 @@ struct VisualFrame {
     int score_level = 0;
     float score_feedback_timer = 0;
     bool score_feedback_good = false;
+    float score_bar_bounce = 0;
+    int nearest_enemy_idx = -1;
 };
 
 struct GameState {
@@ -45,7 +47,7 @@ namespace Systems {
     void update_combat(GameState& game, EventBus& events, float dt, const Timeline& timeline, float music_time);
     void update_movement(GameState& game, float dt);
     void update_spawn(GameState& game, float dt, float gradient);
-    void update_score(GameState& game, EventBus& events, float dt);
+    void update_score(GameState& game, EventBus& events, float dt, float gradient);
     void build_visual_frame(GameState& game, float dt, VisualFrame& out);
     void update_camera(Camera& camera, const Vec2& target_pos, bool player_jumping, float dt);
 }
@@ -54,3 +56,5 @@ float get_brightness_at_time(const Timeline& timeline, float time);
 float get_time_scale(float brightness);
 Vec2 world_to_screen(const Vec2& world_pos, const Camera& camera, int screen_w, int screen_h);
 bool is_good_timing(const Timeline& timeline, float music_time);
+void get_score_rank_color(int level, float& r, float& g, float& b);
+const char* get_score_rank_name(int level);

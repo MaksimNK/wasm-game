@@ -8,10 +8,10 @@
 #include "render.hpp"
 
 static constexpr const char* APP_NAME = "Rhythm Slayer";
-static constexpr const char* DEFAULT_AUDIO_PATH = "audio/test.mp3";
+static constexpr const char* DEFAULT_AUDIO_PATH = "audio/test-3.mp3";
 static constexpr int AUDIO_SAMPLES = 4096;
 static constexpr SDL_AudioFormat AUDIO_FORMAT = AUDIO_F32SYS;
-static constexpr int AUDIO_CHANNELS = 1;
+static constexpr int AUDIO_CHANNELS = 2;
 
 static Timeline g_timeline;
 static GameState g_game;
@@ -71,7 +71,7 @@ static bool step() {
         Systems::update_combat(g_game, g_events, dt, g_timeline, g_time);
         Systems::update_movement(g_game, dt);
         Systems::update_spawn(g_game, dt, gradient);
-        Systems::update_score(g_game, g_events, dt);
+        Systems::update_score(g_game, g_events, dt, gradient);
         Systems::build_visual_frame(g_game, dt, g_visual_frame);
         Systems::update_camera(g_game.camera, g_game.player.pos, 
                                 g_game.player.state != EntityState::Idle, dt);

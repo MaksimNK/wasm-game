@@ -11,36 +11,42 @@ static constexpr float TIME_SCALE_MIN = 0.15f;
 static constexpr float TIME_SCALE_MAX = 1.0f;
 static constexpr float BASE_ENEMY_COUNT = 3.0f;
 static constexpr float ENEMY_COUNT_SCALE = 2.5f;
-static constexpr float SPAWN_DIST = 350.0f;
-static constexpr float SPAWN_DIST_VAR = 150.0f;
-static constexpr float MIN_SPAWN_SPEED = 3.0f;
-static constexpr float MAX_SPAWN_SPEED = 6.0f;
+static constexpr float SPAWN_DIST_MIN = 900.0f;
+static constexpr float SPAWN_DIST_VAR = 300.0f;
+static constexpr float MIN_SPAWN_SPEED = 8.0f;
+static constexpr float MAX_SPAWN_SPEED = 16.0f;
 static constexpr float MIN_ENEMY_RADIUS = 14.0f;
 static constexpr float MAX_ENEMY_RADIUS = 24.0f;
-static constexpr float SPAWN_TIMER_MIN = 0.5f;
-static constexpr float SPAWN_TIMER_MAX = 1.5f;
+static constexpr float SPAWN_TIMER_MIN = 0.3f;
+static constexpr float SPAWN_TIMER_MAX = 0.8f;
 static constexpr float MIN_ATTACK_DIST = 40.0f;
 static constexpr float JUMP_DURATION = 0.25f;
-static constexpr float CURVE_AMOUNT = 80.0f;
+static constexpr float CURVE_AMOUNT = 120.0f;
 static constexpr float SWORD_LENGTH = 115.0f;
 static constexpr float SWORD_HIT_RANGE = 70.0f;
 static constexpr float BLOW_RADIUS = 300.0f;
 static constexpr float BLOW_FORCE = 400.0f;
 static constexpr float BLOW_DURATION = 0.6f;
 static constexpr float FLASH_DURATION = 0.15f;
-static constexpr float ENEMY_SPEED = 100.0f;
-static constexpr float ENEMY_MAX_SPEED = 250.0f;
+static constexpr float ENEMY_SPEED = 320.0f;
+static constexpr float ENEMY_MAX_SPEED = 600.0f;
+static constexpr float ENEMY_FEAR_SPEED = 700.0f;
+static constexpr float PLAYER_DRIFT_SPEED = 180.0f;
+static constexpr float PLAYER_INERTIA_FRICTION = 0.35f;
+static constexpr float PLAYER_CURVE_RATE = 2.5f;
+static constexpr float PLAYER_CURVE_AMP = 1.4f;
 static constexpr float ZOOM_IDLE = 1.3f;
-static constexpr float ZOOM_JUMP = 1.15f;
+static constexpr float ZOOM_JUMP = 1.05f;
 static constexpr float SCREEN_CENTER_X = 0.5f;
 static constexpr float SCREEN_CENTER_Y = 0.45f;
-static constexpr float TIMING_THRESHOLD = 0.6f;
+static constexpr float TIMING_THRESHOLD = 0.55f;
+static constexpr float TIMING_WINDOW_SEC = 0.18f;
 static constexpr int BASE_HIT_POINTS = 100;
 static constexpr int KILL_POINTS = 50;
 static constexpr float FILL_PER_HIT = 0.15f;
 static constexpr float MISS_PENALTY = 0.15f;
 static constexpr float LEVEL_MULTIPLIER = 0.1f;
-static constexpr int MAX_LEVEL = 10;
+static constexpr int MAX_LEVEL = 7;
 
 // --- Sword animation ---
 static constexpr float SWORD_WINDUP_LEFT = M_PI * 0.92f;
@@ -52,7 +58,7 @@ static constexpr float SWORD_CHARGE_SPEED = 18.0f;
 static constexpr float SWORD_IDLE_SPEED = 6.0f;
 static constexpr float ANGLE_ROTATION_SPEED = 12.0f;
 static constexpr float CAMERA_FOLLOW_SPEED = 8.0f;
-static constexpr float CAMERA_ZOOM_SPEED = 6.0f;
+static constexpr float CAMERA_ZOOM_SPEED = 10.0f;
 
 // --- Attack phases ---
 static constexpr float CHARGE_RATIO = 0.35f;
@@ -70,8 +76,8 @@ static constexpr int RIBBON_SEGMENTS_IDLE = 1;
 // ============================================================================
 
 float get_brightness_at_time(const Timeline& timeline, float time) {
-    if (timeline.gradient.empty()) return 0.0f;
-    int idx = (int)(time * timeline.fps);
+    if (timeline.gradient.empty() || timeline.sample_rate <= 0) return 0.0f;
+    int idx = (int)(time * timeline.sample_rate);
     if (idx < 0) return timeline.gradient[0];
     if (idx >= (int)timeline.gradient.size()) return timeline.gradient.back();
     return timeline.gradient[idx];
@@ -89,7 +95,55 @@ Vec2 world_to_screen(const Vec2& world_pos, const Camera& camera, int screen_w, 
 }
 
 bool is_good_timing(const Timeline& timeline, float music_time) {
-    return get_brightness_at_time(timeline, music_time) >= TIMING_THRESHOLD;
+    if (timeline.gradient.empty() || timeline.sample_rate <= 0) return false;
+    int idx = (int)(music_time * timeline.sample_rate);
+    int window = (int)(timeline.sample_rate * TIMING_WINDOW_SEC);
+    if (idx < 0 || idx >= (int)timeline.gradient.size()) return false;
+    
+    float peak = 0.0f;
+    for (int i = idx - window; i <= idx + window; i++) {
+        if (i >= 0 && i < (int)timeline.gradient.size()) {
+            peak = fmaxf(peak, timeline.gradient[i]);
+        }
+    }
+    
+    return peak >= TIMING_THRESHOLD && timeline.gradient[idx] >= peak * 0.85f;
+}
+
+const char* get_score_rank_name(int level) {
+    switch (level) {
+        case 0: return "F";
+        case 1: return "E";
+        case 2: return "D";
+        case 3: return "C";
+        case 4: return "B";
+        case 5: return "A";
+        case 6: return "S";
+        case 7: return "S+";
+        default: return "F";
+    }
+}
+
+void get_score_rank_color(int level, float& r, float& g, float& b) {
+    switch (level) {
+        case 0: r = 0.55f; g = 0.10f; b = 0.10f; break;
+        case 1: r = 0.65f; g = 0.12f; b = 0.12f; break;
+        case 2: r = 0.75f; g = 0.15f; b = 0.15f; break;
+        case 3: r = 0.82f; g = 0.18f; b = 0.18f; break;
+        case 4: r = 0.88f; g = 0.22f; b = 0.22f; break;
+        case 5: r = 0.93f; g = 0.28f; b = 0.28f; break;
+        case 6: r = 0.97f; g = 0.35f; b = 0.35f; break;
+        case 7: r = 1.00f; g = 0.45f; b = 0.45f; break;
+        default: r = 0.55f; g = 0.10f; b = 0.10f; break;
+    }
+}
+
+static float get_miss_penalty(int level, int misses) {
+    float base = 0.85f - level * 0.08f;
+    if (base < 0.15f) base = 0.15f;
+    float decay = 1.0f;
+    for (int i = 0; i < misses; i++) decay *= base;
+    return decay;
 }
 
 // ============================================================================
@@ -185,15 +239,15 @@ void Systems::update_combat(GameState& game, EventBus& events, float dt, const T
             p.target_enemy = target;
             p.jump_start = p.pos;
             Vec2 dir = (enemy_pos - p.pos).normalized();
-            p.jump_target = enemy_pos - dir * (SWORD_LENGTH * 0.5f);
+            p.jump_target = enemy_pos - dir * (SWORD_LENGTH * 0.66f);
             Vec2 mid = (p.jump_start + p.jump_target) * 0.5f;
             Vec2 perp(-dir.y, dir.x);
             float curve = (randf() > 0.5f ? 1.0f : -1.0f) * CURVE_AMOUNT;
             p.jump_control = mid + perp * curve;
-            p.angle = atan2f(dir.y, dir.x);
+            p.target_angle = atan2f(dir.y, dir.x);
         } else {
             p.target_enemy = -1;
-            Vec2 dir(cosf(p.angle), sinf(p.angle));
+            Vec2 dir(cosf(p.target_angle), sinf(p.target_angle));
             p.jump_start = p.pos;
             p.jump_target = p.pos + dir * 120.0f;
             p.jump_control = p.pos + dir * 60.0f;
@@ -232,14 +286,15 @@ void Systems::update_combat(GameState& game, EventBus& events, float dt, const T
                 game.enemies[p.target_enemy].flash_timer = FLASH_DURATION;
             }
             
-            // Kill enemies in sword range
+            // Kill enemies in sword range (33% of enemy radius collision)
             float sword_angle = p.angle + p.sword_offset;
             Vec2 sword_tip(p.pos.x + cosf(sword_angle) * SWORD_LENGTH,
                           p.pos.y + sinf(sword_angle) * SWORD_LENGTH);
             for (size_t i = 0; i < game.enemies.size(); i++) {
                 auto& en = game.enemies[i];
                 if (!en.alive || i == (size_t)p.target_enemy) continue;
-                if ((en.pos - sword_tip).len() < SWORD_HIT_RANGE) {
+                float hit_dist = en.radius * 0.33f;
+                if ((en.pos - sword_tip).len() < hit_dist) {
                     blow_away_enemies(game.enemies, en.pos);
                     en.alive = false;
                     en.flash_timer = FLASH_DURATION;
@@ -273,6 +328,10 @@ void Systems::update_combat(GameState& game, EventBus& events, float dt, const T
 void Systems::update_movement(GameState& game, float dt) {
     Player& p = game.player;
     
+    // Smooth rotation toward target angle (always active)
+    float angle_diff_val = angle_diff(p.target_angle, p.angle);
+    p.angle += angle_diff_val * dt * ANGLE_ROTATION_SPEED;
+    
     // Player jump
     if (p.state != EntityState::Idle) {
         float progress = 1.0f - (p.state_timer / p.state_duration);
@@ -287,12 +346,23 @@ void Systems::update_movement(GameState& game, float dt) {
             move_progress = 1.0f;
         }
         
+        Vec2 prev_pos = p.pos;
         p.pos = bezier(move_progress, p.jump_start, p.jump_control, p.jump_target);
+        p.vel = (p.pos - prev_pos) * (1.0f / dt);  // derive velocity from movement
+    } else {
+        // Inertia drift when idle - curved motion, never fully stop
+        p.pos = p.pos + p.vel * dt;
+        p.vel = p.vel * (1.0f - dt * PLAYER_INERTIA_FRICTION);
         
-        if (p.target_enemy >= 0) {
-            float target_angle = atan2f(p.jump_target.y - p.jump_start.y, p.jump_target.x - p.jump_start.x);
-            p.angle += angle_diff(target_angle, p.angle) * dt * ANGLE_ROTATION_SPEED;
-        }
+        // Curved drift: direction rotates in a wave pattern
+        static float drift_phase = 0.0f;
+        drift_phase += dt * PLAYER_CURVE_RATE;
+        float drift_angle = p.angle + sinf(drift_phase) * PLAYER_CURVE_AMP;
+        Vec2 drift(cosf(drift_angle), sinf(drift_angle));
+        p.vel = p.vel + drift * PLAYER_DRIFT_SPEED * dt;
+        
+        // Stronger random jitter for organic chaotic feel
+        p.vel = p.vel + Vec2((randf() - 0.5f) * 35.0f, (randf() - 0.5f) * 35.0f) * dt;
     }
     
     // Enemy movement
@@ -303,15 +373,87 @@ void Systems::update_movement(GameState& game, float dt) {
             en.blow_away_vel = en.blow_away_vel * (1.0f - dt * 2.0f);
             if (en.blow_away_timer <= 0) {
                 en.being_blown = false;
+                en.fear_timer = 1.0f + randf() * 0.8f;
+                en.behavior_timer = 0;
+                // Keep some residual blow velocity for natural transition
+                en.vel = en.blow_away_vel * 0.3f;
                 en.blow_away_vel = Vec2(0, 0);
             }
+        } else if (en.fear_timer > 0 && en.alive) {
+            // Fear state: panic flee with high acceleration
+            en.fear_timer -= dt;
+            Vec2 away = (en.pos - p.pos).normalized();
+            // Rapid direction jitter for chaotic panic
+            float panic_jitter = (randf() - 0.5f) * M_PI * 1.2f;
+            float cos_p = cosf(panic_jitter);
+            float sin_p = sinf(panic_jitter);
+            Vec2 panic_dir(away.x * cos_p - away.y * sin_p, away.x * sin_p + away.y * cos_p);
+            // Strong acceleration away
+            en.vel.x += panic_dir.x * ENEMY_FEAR_SPEED * 4.0f * dt;
+            en.vel.y += panic_dir.y * ENEMY_FEAR_SPEED * 4.0f * dt;
+            float speed = en.vel.len();
+            float max_fear = ENEMY_FEAR_SPEED * 2.5f;
+            if (speed > max_fear) en.vel = en.vel.normalized() * max_fear;
+            en.pos = en.pos + en.vel * dt;
+            if (en.fear_timer <= 0) {
+                en.behavior = EnemyBehavior::Chase;
+                en.behavior_timer = 0.3f + randf() * 0.3f;
+            }
         } else if (en.alive) {
+            // Demonic behavior state machine
+            en.behavior_timer -= dt;
+            if (en.behavior_timer <= 0) {
+                EnemyBehavior old = en.behavior;
+                float r = randf();
+                if (r < 0.30f) {
+                    en.behavior = EnemyBehavior::Chase;
+                    en.behavior_timer = 0.4f + randf() * 0.4f;
+                } else if (r < 0.55f) {
+                    en.behavior = EnemyBehavior::Flee;
+                    en.behavior_timer = 0.25f + randf() * 0.35f;
+                } else {
+                    en.behavior = EnemyBehavior::Charge;
+                    en.behavior_timer = 0.15f + randf() * 0.25f;
+                }
+                // On state change, dampen old velocity for cleaner transitions
+                if (old != en.behavior) {
+                    en.vel = en.vel * 0.6f;
+                }
+            }
+            
             Vec2 to_player = (p.pos - en.pos).normalized();
-            en.vel.x += to_player.x * ENEMY_SPEED * dt;
-            en.vel.y += to_player.y * ENEMY_SPEED * dt;
+            float accel = ENEMY_SPEED * 3.0f;
+            float max_speed = ENEMY_MAX_SPEED * (0.6f + 0.5f * en.base_speed / MAX_SPAWN_SPEED);
+            
+            switch (en.behavior) {
+                case EnemyBehavior::Chase: {
+                    float jx = (randf() - 0.5f) * 80.0f;
+                    float jy = (randf() - 0.5f) * 80.0f;
+                    en.vel.x += (to_player.x * accel + jx) * dt;
+                    en.vel.y += (to_player.y * accel + jy) * dt;
+                    max_speed *= 1.1f;
+                    break;
+                }
+                case EnemyBehavior::Flee: {
+                    Vec2 away = (en.pos - p.pos).normalized();
+                    float jx = (randf() - 0.5f) * 100.0f;
+                    float jy = (randf() - 0.5f) * 100.0f;
+                    en.vel.x += (away.x * accel * 2.2f + jx) * dt;
+                    en.vel.y += (away.y * accel * 2.2f + jy) * dt;
+                    max_speed *= 1.6f;
+                    break;
+                }
+                case EnemyBehavior::Charge: {
+                    float jx = (randf() - 0.5f) * 40.0f;
+                    float jy = (randf() - 0.5f) * 40.0f;
+                    en.vel.x += (to_player.x * accel * 6.0f + jx) * dt;
+                    en.vel.y += (to_player.y * accel * 6.0f + jy) * dt;
+                    max_speed *= 2.2f;
+                    break;
+                }
+            }
             
             float speed = en.vel.len();
-            float max_speed = ENEMY_MAX_SPEED * (0.5f + 0.5f * en.base_speed / MAX_SPAWN_SPEED);
             if (speed > max_speed) en.vel = en.vel.normalized() * max_speed;
             en.pos = en.pos + en.vel * dt;
         }
@@ -322,10 +464,13 @@ void Systems::update_movement(GameState& game, float dt) {
 // SPAWN
 // ============================================================================
 
-static void spawn_enemy(std::vector<Enemy>& enemies, const Vec2& player_pos, float gradient) {
+static void spawn_enemy(std::vector<Enemy>& enemies, const Vec2& player_pos, float gradient, const Camera& camera) {
     Enemy en;
     float angle = randf() * 2.0f * M_PI;
-    float dist = SPAWN_DIST + randf() * SPAWN_DIST_VAR;
+    // Ensure spawn is well outside camera view regardless of zoom/screen size
+    // Conservative: assume min screen 800x600, but scale with zoom
+    float min_visible = 400.0f / camera.zoom;  // half of small screen
+    float dist = fmaxf(SPAWN_DIST_MIN, min_visible * 1.4f) + randf() * SPAWN_DIST_VAR;
     en.pos = Vec2(player_pos.x + cosf(angle) * dist, player_pos.y + sinf(angle) * dist);
     
     Vec2 to_player = (player_pos - en.pos).normalized();
@@ -346,13 +491,13 @@ void Systems::update_spawn(GameState& game, float dt, float gradient) {
     if (alive_count < target_count) {
         int needed = target_count - alive_count;
         for (int i = 0; i < needed && alive_count + i < max_count; i++) {
-            spawn_enemy(game.enemies, game.player.pos, gradient);
+            spawn_enemy(game.enemies, game.player.pos, gradient, game.camera);
         }
     }
     
     game.spawn_timer -= dt;
     if (alive_count < max_count && game.spawn_timer <= 0) {
-        spawn_enemy(game.enemies, game.player.pos, gradient);
+        spawn_enemy(game.enemies, game.player.pos, gradient, game.camera);
         game.spawn_timer = SPAWN_TIMER_MIN + randf() * (SPAWN_TIMER_MAX - SPAWN_TIMER_MIN);
     }
 }
@@ -361,7 +506,7 @@ void Systems::update_spawn(GameState& game, float dt, float gradient) {
 // SCORE
 // ============================================================================
 
-void Systems::update_score(GameState& game, EventBus& events, float dt) {
+void Systems::update_score(GameState& game, EventBus& events, float dt, float gradient) {
     ScoreData& s = game.score;
     
     for (const auto& evt : events.scores) {
@@ -373,14 +518,10 @@ void Systems::update_score(GameState& game, EventBus& events, float dt) {
             s.misses = 0;
             s.last_hit_good = true;
         } else {
-            float penalty;
-            if (s.misses == 0) penalty = 0.8f;
-            else if (s.misses == 1) penalty = 0.5f;
-            else if (s.misses == 2) penalty = 0.25f;
-            else penalty = 0.1f;
+            float penalty = get_miss_penalty(s.level, s.misses);
             s.points = (int)(s.points * penalty);
-            s.fill -= MISS_PENALTY;
-            if (s.fill < 0) s.fill = 0;
+            s.fill -= MISS_PENALTY * (1.0f + s.level * 0.15f);
+            // Don't clamp here - let the level drop logic handle negative fill
             s.combo = 0;
             s.misses++;
             s.last_hit_good = false;
@@ -394,6 +535,18 @@ void Systems::update_score(GameState& game, EventBus& events, float dt) {
         s.level++;
         s.combo = 0;
     }
+    // Drop down on severe underfill (check BEFORE clamping to 0)
+    if (s.fill < 0 && s.level > 0) {
+        s.level--;
+        s.fill = 0.75f + s.fill;  // carry over negative as penalty
+        if (s.fill < 0) s.fill = 0;
+        s.combo = 0;
+    } else if (s.fill < 0) {
+        s.fill = 0;
+    }
+    
+    // Bar bounce animation from gradient
+    s.bar_bounce += (gradient - s.bar_bounce) * dt * 10.0f;
 }
 
 // ============================================================================
@@ -402,8 +555,8 @@ void Systems::update_score(GameState& game, EventBus& events, float dt) {
 
 static struct SwordAnimState {
     bool slash_from_left = true;
-    float last_end_offset = 0.0f;
-    float visual_offset = 0.0f;
+    float last_end_offset = M_PI * 0.35f;
+    float visual_offset = M_PI * 0.35f;
 } g_sword;
 
 void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
@@ -525,6 +678,19 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
     out.score_level = s.display_level;
     out.score_feedback_timer = s.feedback_timer;
     out.score_feedback_good = s.last_hit_good;
+    out.score_bar_bounce = s.bar_bounce;
+    
+    // Find nearest enemy for UI indicator
+    out.nearest_enemy_idx = -1;
+    float min_dist = 999999.0f;
+    for (size_t i = 0; i < game.enemies.size(); i++) {
+        if (!game.enemies[i].alive) continue;
+        float d = (game.enemies[i].pos - game.player.pos).len();
+        if (d < min_dist && d > MIN_ATTACK_DIST) {
+            min_dist = d;
+            out.nearest_enemy_idx = (int)i;
+        }
+    }
 }
 
 // ============================================================================

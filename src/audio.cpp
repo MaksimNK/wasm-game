@@ -69,7 +69,7 @@ static float hann(int i, int n) {
 
 Timeline analyzeAudio(const std::vector<float>& audio, int sampleRate) {
     Timeline t;
-    t.fps = (float)sampleRate / HOP_SIZE;
+    t.sample_rate = (float)sampleRate / HOP_SIZE;
     
     int frames = (int)audio.size() > FFT_SIZE
         ? ((int)audio.size() - FFT_SIZE) / HOP_SIZE + 1
@@ -173,11 +173,17 @@ void AudioPlayer::fillStream(Uint8* stream, int len) {
         memset(stream, 0, len);
         return;
     }
-    int n = len / sizeof(float);
+    int frames = len / (sizeof(float) * 2);
     int rem = totalSamples - currentSample;
-    int copy = std::min(n, rem);
-    memcpy(stream, &samples[currentSample], copy * sizeof(float));
-    if (copy < n) memset(stream + copy * sizeof(float), 0, (n - copy) * sizeof(float));
+    int copy = std::min(frames, rem);
+    float* out = (float*)stream;
+    for (int i = 0; i < copy; i++) {
+        out[i * 2] = samples[currentSample + i];
+        out[i * 2 + 1] = samples[currentSample + i];
+    }
+    if (copy < frames) {
+        memset(out + copy * 2, 0, (frames - copy) * 2 * sizeof(float));
+    }
     currentSample += copy;
     lastCallbackTime = SDL_GetTicks();
     lastCallbackSample = currentSample;
@@ -187,7 +193,8 @@ float AudioPlayer::getPlaybackTime() const {
     if (!started || sampleRate <= 0) return 0.0f;
     float audioTime = (float)lastCallbackSample / sampleRate;
     float elapsedSinceCallback = (SDL_GetTicks() - lastCallbackTime) / 1000.0f;
-    return audioTime + elapsedSinceCallback;
+    // Small negative offset for responsiveness (audio callback latency compensation)
+    return audioTime + elapsedSinceCallback - 0.015f;
 }
 
 void sdlAudioCallback(void* userdata, Uint8* stream, int len) {

@@ -2,7 +2,7 @@
   "packages": [
     "emscripten@5.0.6",
     "curl@8.17.0",
-    "yt-dlp@latest"
+    "yt-dlp@2026.03.17"
   ],
   "shell": {
     "scripts": {
@@ -28,21 +28,20 @@
         "mkdir -p \"$EM_CACHE\"",
         "[ -f deps/kiss_fft.h ] || devbox run fetch-deps",
         "mkdir -p audio out",
+        "rm -rf out/game.js out/game.wasm out/index.html out/game.data",
         "cp static/index.html out/index.html",
-        "emcc src/main.cpp src/audio.cpp src/components.cpp src/events.cpp src/systems.cpp src/render.cpp deps/kiss_fft.c -o out/game.js -I include -I deps -s USE_SDL=2 -s FULL_ES2=1 -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 --preload-file audio -lm -O2",
+        "emcc src/main.cpp src/audio.cpp src/components.cpp src/events.cpp src/systems.cpp src/render.cpp deps/kiss_fft.c -o out/game.js -I include -I deps -s USE_SDL=2 -s FULL_ES2=1 -s WASM=1 -s ALLOW_MEMORY_GROWTH=1 --preload-file audio --preload-file static/shaders -lm -O2",
         "echo 'Build complete: out/'"
       ],
-      "run": [
+        "run": [
         "set -e",
         "[ -f out/game.js ] || devbox run build",
         "OLD_PID=$(fuser 6931/tcp 2>/dev/null | tr -d ' ')",
         "[ -n \"$OLD_PID\" ] && kill $OLD_PID 2>/dev/null || true",
+        "emrun --no_browser --port 6931 out/ &",
+        "sleep 1",
         "xdg-open http://localhost:6931/index.html 2>/dev/null || open http://localhost:6931/index.html 2>/dev/null || true",
-        "busybox httpd -f -p 6931 -h out/"
-      ],
-      "clean": [
-        "rm -rf out/game.js out/game.wasm out/index.html out/game.data",
-        "echo 'Cleaned.'"
+        "wait"
       ]
     }
   }

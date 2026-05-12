@@ -1,8 +1,10 @@
 #include "components.hpp"
 
 void Player::reset() {
-    pos = Vec2(0, 0);
-    angle = 0;
+    pos = Vec2(120, 80);
+    vel = Vec2(30, 20);
+    angle = M_PI * 0.25f;
+    target_angle = angle;
     state = EntityState::Idle;
     state_timer = 0;
     state_duration = 0.25f;
@@ -20,6 +22,9 @@ void Enemy::reset() {
     blow_away_timer = 0;
     blow_away_vel = Vec2(0, 0);
     being_blown = false;
+    fear_timer = 0;
+    behavior = EnemyBehavior::Chase;
+    behavior_timer = 0;
 }
 
 void ScoreData::reset() {
@@ -34,4 +39,5 @@ void ScoreData::reset() {
     display_fill = 0;
     display_level = 0;
     level_anim_timer = 0;
+    bar_bounce = 0;
 }

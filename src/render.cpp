@@ -4,6 +4,7 @@
 #include <GLES2/gl2.h>
 #include <cmath>
 #include <algorithm>
+#include <string>
 #include <cstdio>
 
 #ifndef M_PI
@@ -19,7 +20,7 @@ static constexpr int BAR_W = 377;
 static constexpr int BAR_H = 17;
 static constexpr float BAR_Y_RATIO = 1.21f;
 static constexpr float WINDOW_SECONDS = 0.77f;
-static constexpr float PLAYHEAD_RATIO = 0.21f;
+static constexpr float PLAYHEAD_RATIO = 0.5f;
 static constexpr float DISTORTION_FACTOR = 6.0f;
 static constexpr float DISTORTION_DIVISOR = 7.0f;
 
@@ -52,26 +53,6 @@ static constexpr int SCORE_BAR_W = BAR_W / 2;
 // --- Window ---
 static constexpr Uint32 WINDOW_FLAGS = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL;
 
-// --- Shaders ---
-static const char* vertex_shader = R"(
-attribute vec2 a_pos;
-attribute vec4 a_color;
-varying vec4 v_color;
-uniform mat4 u_projection;
-void main() {
-    gl_Position = u_projection * vec4(a_pos, 0.0, 1.0);
-    v_color = a_color;
-}
-)";
-
-static const char* fragment_shader = R"(
-precision mediump float;
-varying vec4 v_color;
-void main() {
-    gl_FragColor = v_color;
-}
-)";
-
 struct DrawCmd {
     GLenum mode;
     GLint offset;
@@ -85,10 +66,29 @@ struct Renderer {
     GLint pos_loc = -1;
     GLint color_loc = -1;
     GLint proj_loc = -1;
+    GLint brightness_loc = -1;
+    GLint fisheye_loc = -1;
+    GLint screen_center_loc = -1;
     GLuint vbo = 0;
     std::vector<float> verts;
     std::vector<DrawCmd> cmds;
 };
+
+static std::string load_shader_file(const char* path) {
+    std::string source;
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "[SHADER] Failed to open: %s\n", path);
+        return source;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    source.resize(sz);
+    fread(&source[0], 1, sz, f);
+    fclose(f);
+    return source;
+}
 
 static GLuint compile_shader(const char* source, GLenum type) {
     GLuint shader = glCreateShader(type);
@@ -107,8 +107,12 @@ static GLuint compile_shader(const char* source, GLenum type) {
 }
 
 static bool init_gl(Renderer* r) {
-    GLuint vs = compile_shader(vertex_shader, GL_VERTEX_SHADER);
-    GLuint fs = compile_shader(fragment_shader, GL_FRAGMENT_SHADER);
+    std::string vs_src = load_shader_file("static/shaders/vertex.glsl");
+    std::string fs_src = load_shader_file("static/shaders/fragment.glsl");
+    if (vs_src.empty() || fs_src.empty()) return false;
+    
+    GLuint vs = compile_shader(vs_src.c_str(), GL_VERTEX_SHADER);
+    GLuint fs = compile_shader(fs_src.c_str(), GL_FRAGMENT_SHADER);
     if (!vs || !fs) return false;
     
     r->program = glCreateProgram();
@@ -135,6 +139,9 @@ static bool init_gl(Renderer* r) {
     r->pos_loc = glGetAttribLocation(r->program, "a_pos");
     r->color_loc = glGetAttribLocation(r->program, "a_color");
     r->proj_loc = glGetUniformLocation(r->program, "u_projection");
+    r->brightness_loc = glGetUniformLocation(r->program, "u_brightness");
+    r->fisheye_loc = glGetUniformLocation(r->program, "u_fisheye");
+    r->screen_center_loc = glGetUniformLocation(r->program, "u_screen_center");
     glGenBuffers(1, &r->vbo);
     return true;
 }
@@ -241,6 +248,7 @@ static void draw_ribbon(Renderer* r, const Vec2& prev_base, const Vec2& prev_tip
     push_tri(r, prev_base.x, prev_base.y, curr_tip.x, curr_tip.y, curr_base.x, curr_base.y, R, G, B, A);
 }
 
+
 static Uint8 get_bar_alpha(float gradient) {
     if (gradient < ALPHA_LOW_THRESHOLD) {
         return (Uint8)(gradient / ALPHA_LOW_DIVISOR * ALPHA_LOW_MAX);
@@ -248,48 +256,62 @@ static Uint8 get_bar_alpha(float gradient) {
     return (Uint8)(ALPHA_HIGH_OFFSET + (gradient - ALPHA_LOW_THRESHOLD) / ALPHA_HIGH_DIVISOR * ALPHA_HIGH_MAX);
 }
 
-static void draw_score_bar(Renderer* r, int screen_w, int screen_h, const VisualFrame& frame) {
+static int eq_height(float intensity, int max_h) {
+    // 0 intensity = 1px, 1.0 intensity = max_h
+    int h = (int)(1 + intensity * (max_h - 1));
+    if (h < 1) h = 1;
+    if (h > max_h) h = max_h;
+    return h;
+}
+
+static void draw_score_bar(Renderer* r, int screen_w, int screen_h, const VisualFrame& frame,
+                           const Timeline& timeline, float time) {
     float ui_offset_x = (frame.player_pos.x - frame.camera.pos.x) * frame.camera.zoom * 0.35f;
     float ui_offset_y = (frame.player_pos.y - frame.camera.pos.y) * frame.camera.zoom * 0.22f;
     
     int bar_x = (int)((screen_w - SCORE_BAR_W) / 2 + ui_offset_x);
     int bar_y = (int)((screen_h - BAR_H) / BAR_Y_RATIO + BAR_H + 12 + ui_offset_y);
     int center_y = bar_y + SCORE_BAR_H / 2;
-    
-    auto distort = [](float x) -> float {
-        float abs_x = fabsf(x);
-        float sign = x >= 0 ? 1.0f : -1.0f;
-        return sign * abs_x * (1.0f + DISTORTION_FACTOR * abs_x * abs_x) / DISTORTION_DIVISOR;
-    };
+    int max_half_h = SCORE_BAR_H / 2;
     
     float fill_extent = frame.score_fill;
+    float bounce = frame.score_bar_bounce;
     
-    for (int px = 0; px < SCORE_BAR_W; px++) {
-        float rat = px / (float)SCORE_BAR_W;
-        float d = rat - 0.5f;
-        float normalized = d / 0.5f;
-        float distorted = distort(normalized);
-        float dist_from_center = fabsf(distorted);
+    float rank_r, rank_g, rank_b;
+    get_score_rank_color(frame.score_level, rank_r, rank_g, rank_b);
+    
+    int num_bars = 16;
+    int bar_gap = 2;
+    int bar_w = (SCORE_BAR_W - (num_bars - 1) * bar_gap) / num_bars;
+    int total_w = num_bars * bar_w + (num_bars - 1) * bar_gap;
+    int start_x = bar_x + (SCORE_BAR_W - total_w) / 2;
+    
+    for (int i = 0; i < num_bars; i++) {
+        float rat = i / (float)(num_bars - 1);
+        float dist_from_center = fabsf(rat - 0.5f) / 0.5f;
         
         if (dist_from_center > fill_extent) continue;
         
         float intensity = 1.0f - dist_from_center * 0.5f;
-        int half_h = (int)(intensity * (SCORE_BAR_H / 2));
-        if (half_h < 1) half_h = 1;
         
-        int x = bar_x + px;
+        // Sync each bar to music gradient
+        float time_offset = (rat - 0.5f) * 0.5f;
+        float sample_grad = get_brightness_at_time(timeline, time + time_offset);
+        float bar_intensity = bounce * 0.3f + sample_grad * 0.7f;
         
-        float r_val, g_val, b_val;
-        int lvl = frame.score_level;
-        if (lvl == 0) { r_val = 180; g_val = 40; b_val = 40; }
-        else if (lvl == 1) { r_val = 220; g_val = 60; b_val = 60; }
-        else if (lvl == 2) { r_val = 255; g_val = 80; b_val = 80; }
-        else { r_val = 255; g_val = 120; b_val = 120; }
+        int half_h = eq_height(bar_intensity * intensity, max_half_h);
         
-        r_val /= 255.0f; g_val /= 255.0f; b_val /= 255.0f;
+        int x = start_x + i * (bar_w + bar_gap);
+        
+        float r_val = rank_r * (1.0f + intensity * 0.3f);
+        float g_val = rank_g * (1.0f + intensity * 0.3f);
+        float b_val = rank_b * (1.0f + intensity * 0.3f);
         
         Uint8 alpha = get_bar_alpha(intensity);
-        push_line(r, x, center_y - half_h, x, center_y + half_h, r_val, g_val, b_val, alpha / 255.0f);
+        push_tri(r, x, center_y - half_h, x + bar_w, center_y - half_h, x + bar_w, center_y + half_h,
+                 r_val, g_val, b_val, alpha / 255.0f);
+        push_tri(r, x, center_y - half_h, x + bar_w, center_y + half_h, x, center_y + half_h,
+                 r_val, g_val, b_val, alpha / 255.0f);
     }
     
     if (frame.score_feedback_timer > 0) {
@@ -383,11 +405,22 @@ void render_frame(Renderer* r, const VisualFrame& frame, const Timeline& timelin
     glUseProgram(r->program);
     glUniformMatrix4fv(r->proj_loc, 1, GL_FALSE, proj);
     
+    // Shader effects scaled by music intensity
+    float brightness = 0.65f + gradient * 0.55f;
+    float fisheye = 0.8f;
+    glUniform1f(r->brightness_loc, brightness);
+    glUniform1f(r->fisheye_loc, fisheye);
+    glUniform2f(r->screen_center_loc, w * 0.5f, h * 0.5f);
+    
     r->verts.clear();
     r->cmds.clear();
     
+    float sword_r, sword_g, sword_b;
+    get_score_rank_color(frame.score_level, sword_r, sword_g, sword_b);
+    
     if (running) {
-        // Ribbons
+        // Ribbons (additive blending to fix overlap artifacts)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         for (size_t i = 1; i < frame.ribbons.size(); i++) {
             const auto& prev = frame.ribbons[i-1];
             const auto& curr = frame.ribbons[i];
@@ -403,46 +436,54 @@ void render_frame(Renderer* r, const VisualFrame& frame, const Timeline& timelin
             Vec2 cb = world_to_screen(curr.base, frame.camera, w, h);
             Vec2 ct = world_to_screen(curr.tip, frame.camera, w, h);
             
-            draw_ribbon(r, pb, pt, cb, ct, 1, 1, 1, ghost_alpha);
+            draw_ribbon(r, pb, pt, cb, ct, sword_r, sword_g, sword_b, ghost_alpha);
         }
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         
         // Enemies
-        for (const auto& en : frame.enemies) {
+        for (size_t i = 0; i < frame.enemies.size(); i++) {
+            const auto& en = frame.enemies[i];
             Vec2 s = world_to_screen(en.pos, frame.camera, w, h);
             float rad = en.radius * frame.camera.zoom;
             draw_enemy(r, s.x, s.y, rad, 1, 1, 1, en.alpha);
+            // Nearest enemy indicator
+            if ((int)i == frame.nearest_enemy_idx) {
+                draw_circle(r, s.x, s.y, rad * 1.3f, 1, 0.3f, 0.3f, 0.6f);
+            }
         }
         
         // Player
         Vec2 ps = world_to_screen(frame.player_pos, frame.camera, w, h);
         draw_player(r, ps.x, ps.y, frame.player_angle, 1, 1, 1, base_a);
         
-        // Sword
+        // Sword (colored by rank)
         float sword_alpha;
         switch (frame.player_state) {
             case EntityState::Slashing: sword_alpha = 1.0f; break;
             case EntityState::Charging: sword_alpha = base_a * 0.7f + 0.3f; break;
             default: sword_alpha = base_a * 0.85f; break;
         }
-        draw_sword(r, ps.x, ps.y, frame.sword_angle, 1, 1, 1, sword_alpha);
+        draw_sword(r, ps.x, ps.y, frame.sword_angle, sword_r, sword_g, sword_b, sword_alpha);
         
         // Score bar
-        draw_score_bar(r, w, h, frame);
+        draw_score_bar(r, w, h, frame, timeline, time);
     }
-    
+
     // Progress bar
     float ui_offset_x = (frame.player_pos.x - frame.camera.pos.x) * frame.camera.zoom * 0.35f;
     float ui_offset_y = (frame.player_pos.y - frame.camera.pos.y) * frame.camera.zoom * 0.22f;
-    
+
     int bar_x = (int)((w - BAR_W) / 2 + ui_offset_x);
     int bar_y = (int)((h - BAR_H) / BAR_Y_RATIO + ui_offset_y);
     int center_y = bar_y + BAR_H / 2;
-    
+
     if (!timeline.gradient.empty()) {
+        // Inverse hyperbolic: center linear, edges compressed with hyperbolic falloff
         auto distort = [](float x) -> float {
             float abs_x = fabsf(x);
             float sign = x >= 0 ? 1.0f : -1.0f;
-            return sign * abs_x * (1.0f + DISTORTION_FACTOR * abs_x * abs_x) / DISTORTION_DIVISOR;
+            float a = 0.85f;
+            return sign * abs_x / (1.0f + a * abs_x);
         };
         
         int num_frames = timeline.gradient.size();
@@ -454,7 +495,7 @@ void render_frame(Renderer* r, const VisualFrame& frame, const Timeline& timelin
             float distorted = distort(normalized);
             float t = time + distorted * max_d * WINDOW_SECONDS;
             
-            int frame_idx = (int)(t * timeline.fps);
+            int frame_idx = (int)(t * timeline.sample_rate);
             if (frame_idx < 0 || frame_idx >= num_frames) continue;
             
             float g = timeline.gradient[frame_idx];
@@ -467,9 +508,28 @@ void render_frame(Renderer* r, const VisualFrame& frame, const Timeline& timelin
                       220.0f/255.0f, 60.0f/255.0f, 60.0f/255.0f, alpha / 255.0f);
         }
         
+        // Check if playhead is in timing window for visual pulse
+        bool in_timing_window = false;
+        if (timeline.sample_rate > 0) {
+            float window_sec = 0.18f;
+            int window_frames = (int)(timeline.sample_rate * window_sec);
+            int playhead_frame = (int)(time * timeline.sample_rate);
+            if (playhead_frame >= 0 && playhead_frame < num_frames) {
+                float local_peak = 0.0f;
+                for (int f = playhead_frame - window_frames; f <= playhead_frame + window_frames; f++) {
+                    if (f >= 0 && f < num_frames) {
+                        local_peak = fmaxf(local_peak, timeline.gradient[f]);
+                    }
+                }
+                in_timing_window = local_peak >= 0.55f && timeline.gradient[playhead_frame] >= local_peak * 0.85f;
+            }
+        }
+        
         int playhead_x = bar_x + (int)(PLAYHEAD_RATIO * BAR_W);
-        push_line(r, playhead_x, bar_y - 3, playhead_x, bar_y + BAR_H + 3, 
-                  1.0f, 100.0f/255.0f, 100.0f/255.0f, 1.0f);
+        float ph_brightness = in_timing_window ? 1.6f : 1.0f;
+        int ph_extend = in_timing_window ? 6 : 3;
+        push_line(r, playhead_x, bar_y - ph_extend, playhead_x, bar_y + BAR_H + ph_extend, 
+                  ph_brightness, ph_brightness * 0.4f, ph_brightness * 0.4f, 1.0f);
     }
     
     // Flush

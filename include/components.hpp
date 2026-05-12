@@ -14,7 +14,9 @@ enum class EntityState { Idle, Charging, Slashing };
 
 struct Player {
     Vec2 pos;
+    Vec2 vel;
     float angle = 0;
+    float target_angle = 0;
     EntityState state = EntityState::Idle;
     float state_timer = 0;
     float state_duration = 0.25f;
@@ -28,6 +30,8 @@ struct Player {
     void reset();
 };
 
+enum class EnemyBehavior { Chase, Flee, Charge };
+
 struct Enemy {
     Vec2 pos;
     Vec2 vel;
@@ -38,6 +42,9 @@ struct Enemy {
     Vec2 blow_away_vel;
     float base_speed = 0;
     bool being_blown = false;
+    float fear_timer = 0;
+    EnemyBehavior behavior = EnemyBehavior::Chase;
+    float behavior_timer = 0;
     
     void reset();
 };
@@ -59,6 +66,7 @@ struct ScoreData {
     float display_fill = 0;
     int display_level = 0;
     float level_anim_timer = 0;
+    float bar_bounce = 0;
     
     void reset();
 };

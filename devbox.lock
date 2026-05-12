@@ -177,7 +177,7 @@
       "last_modified": "2026-05-08T21:03:27Z",
       "resolved": "github:NixOS/nixpkgs/b3da656039dc7a6240f27b2ef8cc6a3ef3bccae7?lastModified=1778274207&narHash=sha256-I4puXmX1iovcCHZlRmztO3vW0mAbbRvq4F8wgIMQ1MM%3D"
     },
-    "yt-dlp@latest": {
+    "yt-dlp@2026.03.17": {
       "last_modified": "2026-05-06T02:58:03Z",
       "resolved": "github:NixOS/nixpkgs/ed67bc86e84e51d4a88e73c7fd36006dc876476f#yt-dlp",
       "source": "devbox-search",
