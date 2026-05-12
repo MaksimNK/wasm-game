@@ -3,6 +3,7 @@
 #include "components.hpp"
 #include "events.hpp"
 #include "audio.hpp"
+#include "model_loader.hpp"
 
 struct VisualFrame {
     Vec2 player_pos;
@@ -26,6 +27,11 @@ struct VisualFrame {
     bool score_feedback_good = false;
     float score_bar_bounce = 0;
     int nearest_enemy_idx = -1;
+
+    // Sword model (world-space, flat triangle list)
+    std::vector<Vec3> sword_verts_world;
+    Vec3 sword_tip_world;
+    bool has_sword_model = false;
 };
 
 struct GameState {
@@ -33,12 +39,14 @@ struct GameState {
     Camera camera;
     std::vector<Enemy> enemies;
     ScoreData score;
+    MeshModel sword_model;
+    float sword_scale = 115.0f;
     float time_scale = 1.0f;
     float game_time = 0;
     float music_time = 0;
     bool running = false;
     float spawn_timer = 0;
-    
+
     void init();
 };
 

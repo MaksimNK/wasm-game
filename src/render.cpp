@@ -38,9 +38,7 @@ static constexpr float PLAYER_TRI_FRONT = 1.5f;
 static constexpr float PLAYER_TRI_REAR_ANGLE = 2.5f;
 
 // --- Sword ---
-static constexpr float SWORD_LEN = 115.0f;
-static constexpr float SWORD_WIDTH = 5.0f;
-static constexpr float SWORD_HANDLE_OFFSET = 5.0f;
+static constexpr float SWORD_PERSP = 0.3f;
 
 // --- Circle ---
 static constexpr int CIRCLE_SEGMENTS = 8;
@@ -215,25 +213,27 @@ static void draw_player(Renderer* r, float cx, float cy, float angle, float R, f
     draw_triangle_outline(r, fx, fy, lx, ly, rx, ry, R, G, B, A);
 }
 
-static void draw_sword(Renderer* r, float cx, float cy, float angle, float R, float G, float B, float A) {
-    float hx = cosf(angle) * SWORD_HANDLE_OFFSET;
-    float hy = sinf(angle) * SWORD_HANDLE_OFFSET;
-    float tx = cosf(angle) * SWORD_LEN;
-    float ty = sinf(angle) * SWORD_LEN;
-    
-    Vec2 base(cx + hx, cy + hy);
-    Vec2 tip(cx + tx, cy + ty);
-    Vec2 dir = Vec2(tip.x - base.x, tip.y - base.y).normalized();
-    Vec2 perp(-dir.y, dir.x);
-    
-    float w = SWORD_WIDTH;
-    float x1 = base.x + perp.x * w;
-    float y1 = base.y + perp.y * w;
-    float x2 = base.x - perp.x * w;
-    float y2 = base.y - perp.y * w;
-    
-    push_tri(r, x1, y1, x2, y2, tip.x, tip.y, R, G, B, A);
-    draw_triangle_outline(r, x1, y1, x2, y2, tip.x, tip.y, R, G, B, A);
+static void draw_sword_model(Renderer* r, const VisualFrame& frame, int screen_w, int screen_h,
+                              float R, float G, float B, float A) {
+    if (!frame.has_sword_model || frame.sword_verts_world.size() < 3) return;
+
+    const float PERSP = 0.3f;
+
+    for (size_t i = 0; i + 2 < frame.sword_verts_world.size(); i += 3) {
+        const Vec3& v0 = frame.sword_verts_world[i];
+        const Vec3& v1 = frame.sword_verts_world[i+1];
+        const Vec3& v2 = frame.sword_verts_world[i+2];
+
+        Vec2 s0 = world_to_screen(Vec2(v0.x, v0.y + v0.z * PERSP), frame.camera, screen_w, screen_h);
+        Vec2 s1 = world_to_screen(Vec2(v1.x, v1.y + v1.z * PERSP), frame.camera, screen_w, screen_h);
+        Vec2 s2 = world_to_screen(Vec2(v2.x, v2.y + v2.z * PERSP), frame.camera, screen_w, screen_h);
+
+        push_tri(r, s0.x, s0.y, s1.x, s1.y, s2.x, s2.y, R, G, B, A);
+        // Silhouette outline
+        push_line(r, s0.x, s0.y, s1.x, s1.y, R, G, B, A);
+        push_line(r, s1.x, s1.y, s2.x, s2.y, R, G, B, A);
+        push_line(r, s2.x, s2.y, s0.x, s0.y, R, G, B, A);
+    }
 }
 
 static void draw_enemy(Renderer* r, float cx, float cy, float radius, float R, float G, float B, float A) {
@@ -407,7 +407,7 @@ void render_frame(Renderer* r, const VisualFrame& frame, const Timeline& timelin
     
     // Shader effects scaled by music intensity
     float brightness = 0.65f + gradient * 0.55f;
-    float fisheye = 0.8f;
+    float fisheye = 0.5 + gradient / 5.0f;
     glUniform1f(r->brightness_loc, brightness);
     glUniform1f(r->fisheye_loc, fisheye);
     glUniform2f(r->screen_center_loc, w * 0.5f, h * 0.5f);
@@ -456,14 +456,8 @@ void render_frame(Renderer* r, const VisualFrame& frame, const Timeline& timelin
         Vec2 ps = world_to_screen(frame.player_pos, frame.camera, w, h);
         draw_player(r, ps.x, ps.y, frame.player_angle, 1, 1, 1, base_a);
         
-        // Sword (colored by rank)
-        float sword_alpha;
-        switch (frame.player_state) {
-            case EntityState::Slashing: sword_alpha = 1.0f; break;
-            case EntityState::Charging: sword_alpha = base_a * 0.7f + 0.3f; break;
-            default: sword_alpha = base_a * 0.85f; break;
-        }
-        draw_sword(r, ps.x, ps.y, frame.sword_angle, sword_r, sword_g, sword_b, sword_alpha);
+        // Sword model (colored by rank, no alpha modulation)
+        draw_sword_model(r, frame, w, h, sword_r, sword_g, sword_b, 1.0f);
         
         // Score bar
         draw_score_bar(r, w, h, frame, timeline, time);

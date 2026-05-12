@@ -71,6 +71,13 @@ static constexpr int RIBBON_SEGMENTS_CHARGE = 3;
 static constexpr int RIBBON_SEGMENTS_SLASH = 8;
 static constexpr int RIBBON_SEGMENTS_IDLE = 1;
 
+// --- Sword animation state ---
+static struct SwordAnimState {
+    bool slash_from_left = true;
+    float last_end_offset = M_PI * 0.35f;
+    float visual_offset = M_PI * 0.35f;
+} g_sword;
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -146,6 +153,39 @@ static float get_miss_penalty(int level, int misses) {
     return decay;
 }
 
+static bool point_in_convex_poly(const Vec2& p, const Vec2* poly, int n) {
+    for (int i = 0; i < n; i++) {
+        Vec2 a = poly[i];
+        Vec2 b = poly[(i+1)%n];
+        float cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        if (cross < -0.001f) return false;
+    }
+    return true;
+}
+
+static bool circle_intersects_poly(const Vec2& center, float radius, const Vec2* poly, int n) {
+    if (point_in_convex_poly(center, poly, n)) return true;
+    for (int i = 0; i < n; i++) {
+        Vec2 a = poly[i];
+        Vec2 b = poly[(i+1)%n];
+        Vec2 ab = b - a;
+        Vec2 ac = center - a;
+        float ab_len_sq = ab.x * ab.x + ab.y * ab.y;
+        float t = ab_len_sq > 0.001f ? fmaxf(0.0f, fminf(1.0f, (ac.x * ab.x + ac.y * ab.y) / ab_len_sq)) : 0.0f;
+        Vec2 closest = a + ab * t;
+        if ((center - closest).len() < radius) return true;
+    }
+    return false;
+}
+
+static Mat4 build_sword_matrix(const Vec2& pos, float angle, float pitch, float scale) {
+    Mat4 m = Mat4::scale(scale, scale, scale);
+    m = multiply(Mat4::rotate_x(pitch), m);
+    m = multiply(Mat4::rotate_z(angle), m);
+    m = multiply(Mat4::translate(pos.x, pos.y, 0.0f), m);
+    return m;
+}
+
 // ============================================================================
 // GAME STATE
 // ============================================================================
@@ -163,6 +203,13 @@ void GameState::init() {
     music_time = 0;
     enemies.clear();
     score.reset();
+    if (sword_model.vertices.empty()) {
+        if (!sword_model.load_gltf("static/models/sword.gltf")) {
+            fprintf(stderr, "[WARN] Failed to load sword model\n");
+        } else {
+            sword_scale = 115.0f * sword_model.default_scale;
+        }
+    }
 }
 
 // ============================================================================
@@ -216,30 +263,30 @@ static void blow_away_enemies(std::vector<Enemy>& enemies, Vec2 center) {
 
 void Systems::update_combat(GameState& game, EventBus& events, float dt, const Timeline& timeline, float music_time) {
     Player& p = game.player;
-    
+
     // Process attacks
     for (const auto& evt : events.attacks) {
         (void)evt;
-        
+
         // Can't attack while charging or slashing unless chaining
         if (p.state == EntityState::Charging) continue;
         if (p.state == EntityState::Slashing && !p.can_chain) continue;
-        
+
         // Score timing check
         bool good_timing = is_good_timing(timeline, music_time);
-        
+
         p.state = EntityState::Charging;
         p.state_timer = JUMP_DURATION;
         p.state_duration = JUMP_DURATION;
         p.has_slashed = false;
-        
+
         int target = find_nearest_enemy(p, game.enemies);
         if (target >= 0) {
             Vec2 enemy_pos = game.enemies[target].pos;
             p.target_enemy = target;
             p.jump_start = p.pos;
             Vec2 dir = (enemy_pos - p.pos).normalized();
-            p.jump_target = enemy_pos - dir * (SWORD_LENGTH * 0.66f);
+            p.jump_target = enemy_pos - dir * (game.sword_scale * 0.66f);
             Vec2 mid = (p.jump_start + p.jump_target) * 0.5f;
             Vec2 perp(-dir.y, dir.x);
             float curve = (randf() > 0.5f ? 1.0f : -1.0f) * CURVE_AMOUNT;
@@ -252,16 +299,16 @@ void Systems::update_combat(GameState& game, EventBus& events, float dt, const T
             p.jump_target = p.pos + dir * 120.0f;
             p.jump_control = p.pos + dir * 60.0f;
         }
-        
+
         events.scores.push_back({good_timing, target >= 0 ? 1 : 0});
     }
-    
+
     // Update state timer
     if (p.state != EntityState::Idle) {
         p.state_timer -= dt;
         float progress = 1.0f - (p.state_timer / p.state_duration);
         progress = fmaxf(0.0f, fminf(1.0f, progress));
-        
+
         if (p.state == EntityState::Charging && progress >= CHARGE_RATIO) {
             p.state = EntityState::Slashing;
         } else if (p.state == EntityState::Slashing && progress >= CHARGE_RATIO + SLASH_RATIO) {
@@ -271,13 +318,20 @@ void Systems::update_combat(GameState& game, EventBus& events, float dt, const T
             p.has_slashed = false;
         }
     }
-    
+
     // Slash detection at ~50% through slash phase
     if (p.state == EntityState::Slashing && !p.has_slashed) {
         float slash_progress = (1.0f - (p.state_timer / p.state_duration) - CHARGE_RATIO) / SLASH_RATIO;
         if (slash_progress >= 0.5f) {
             p.has_slashed = true;
-            
+
+            // Compute exact sword pose at this instant for collision
+            float windup = g_sword.slash_from_left ? SWORD_WINDUP_LEFT : SWORD_WINDUP_RIGHT;
+            float end = g_sword.slash_from_left ? SWORD_END_RIGHT : SWORD_END_LEFT;
+            float exact_offset = windup + (end - windup) * ease_out_cubic(slash_progress);
+            float exact_pitch = -0.4f + 1.0f * ease_out_cubic(slash_progress);
+            float sword_angle = p.angle + exact_offset;
+
             // Kill target enemy
             if (p.target_enemy >= 0 && p.target_enemy < (int)game.enemies.size() &&
                 game.enemies[p.target_enemy].alive) {
@@ -285,34 +339,40 @@ void Systems::update_combat(GameState& game, EventBus& events, float dt, const T
                 game.enemies[p.target_enemy].alive = false;
                 game.enemies[p.target_enemy].flash_timer = FLASH_DURATION;
             }
-            
-            // Kill enemies in sword range (33% of enemy radius collision)
-            float sword_angle = p.angle + p.sword_offset;
-            Vec2 sword_tip(p.pos.x + cosf(sword_angle) * SWORD_LENGTH,
-                          p.pos.y + sinf(sword_angle) * SWORD_LENGTH);
-            for (size_t i = 0; i < game.enemies.size(); i++) {
-                auto& en = game.enemies[i];
-                if (!en.alive || i == (size_t)p.target_enemy) continue;
-                float hit_dist = en.radius * 0.33f;
-                if ((en.pos - sword_tip).len() < hit_dist) {
-                    blow_away_enemies(game.enemies, en.pos);
-                    en.alive = false;
-                    en.flash_timer = FLASH_DURATION;
+
+            // Kill enemies intersecting sword collision polygon
+            if (!game.sword_model.collision_poly.empty()) {
+                Mat4 sword_mat = build_sword_matrix(p.pos, sword_angle, exact_pitch, game.sword_scale);
+                Vec2 world_poly[4];
+                for (int i = 0; i < 4; i++) {
+                    Vec3 v = transform_point(sword_mat, Vec3(game.sword_model.collision_poly[i].x,
+                                                              game.sword_model.collision_poly[i].y, 0.0f));
+                    world_poly[i] = Vec2(v.x, v.y);
+                }
+                for (size_t i = 0; i < game.enemies.size(); i++) {
+                    auto& en = game.enemies[i];
+                    if (!en.alive || i == (size_t)p.target_enemy) continue;
+                    float hit_dist = en.radius * 0.33f;
+                    if (circle_intersects_poly(en.pos, hit_dist, world_poly, 4)) {
+                        blow_away_enemies(game.enemies, en.pos);
+                        en.alive = false;
+                        en.flash_timer = FLASH_DURATION;
+                    }
                 }
             }
         }
     }
-    
+
     // Can chain if target is dead
     bool target_dead = p.target_enemy < 0 || p.target_enemy >= (int)game.enemies.size() ||
                        !game.enemies[p.target_enemy].alive;
     p.can_chain = target_dead && p.state == EntityState::Slashing;
-    
+
     // Update flash timers
     for (auto& en : game.enemies) {
         if (en.flash_timer > 0) en.flash_timer -= dt;
     }
-    
+
     // Remove dead enemies
     game.enemies.erase(
         std::remove_if(game.enemies.begin(), game.enemies.end(),
@@ -553,15 +613,9 @@ void Systems::update_score(GameState& game, EventBus& events, float dt, float gr
 // ANIMATION
 // ============================================================================
 
-static struct SwordAnimState {
-    bool slash_from_left = true;
-    float last_end_offset = M_PI * 0.35f;
-    float visual_offset = M_PI * 0.35f;
-} g_sword;
-
 void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
     Player& p = game.player;
-    
+
     // Compute phase
     EntityState phase = p.state;
     float phase_progress = 0.0f;
@@ -579,7 +633,7 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
             phase_progress = 1.0f;
         }
     }
-    
+
     // Track direction
     if (p.state == EntityState::Charging) {
         g_sword.slash_from_left = angle_diff(g_sword.last_end_offset, 0.0f) > 0.0f;
@@ -587,24 +641,32 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
     if (phase == EntityState::Slashing) {
         g_sword.last_end_offset = g_sword.visual_offset;
     }
-    
+
     // Compute target offset
     float windup = g_sword.slash_from_left ? SWORD_WINDUP_LEFT : SWORD_WINDUP_RIGHT;
     float end = g_sword.slash_from_left ? SWORD_END_RIGHT : SWORD_END_LEFT;
-    
+
     float target_offset;
     switch (phase) {
         case EntityState::Idle: target_offset = g_sword.last_end_offset; break;
         case EntityState::Charging: target_offset = windup; break;
         case EntityState::Slashing: target_offset = windup + (end - windup) * ease_out_cubic(phase_progress); break;
     }
-    
+
     // Smooth interpolate
     float diff = angle_diff(target_offset, g_sword.visual_offset);
-    float speed = (phase == EntityState::Slashing) ? SWORD_SLASH_SPEED : 
+    float speed = (phase == EntityState::Slashing) ? SWORD_SLASH_SPEED :
                   (phase == EntityState::Charging) ? SWORD_CHARGE_SPEED : SWORD_IDLE_SPEED;
     g_sword.visual_offset += diff * dt * speed;
-    
+
+    // Z-curve (pitch) animation
+    float sword_pitch = 0.0f;
+    switch (phase) {
+        case EntityState::Idle: sword_pitch = 0.0f; break;
+        case EntityState::Charging: sword_pitch = -0.4f * (1.0f - phase_progress); break;
+        case EntityState::Slashing: sword_pitch = -0.4f + 1.0f * ease_out_cubic(phase_progress); break;
+    }
+
     // Build frame
     out.player_pos = p.pos;
     out.player_angle = p.angle;
@@ -612,7 +674,7 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
     out.player_state = p.state;
     out.camera = game.camera;
     out.enemies.clear();
-    
+
     for (const auto& en : game.enemies) {
         VisualFrame::VisualEnemy ven;
         ven.pos = en.pos;
@@ -627,13 +689,24 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
         }
         out.enemies.push_back(ven);
     }
-    
+
+    // Transform sword model to world space
+    out.has_sword_model = false;
+    out.sword_verts_world.clear();
+    if (!game.sword_model.vertices.empty()) {
+        Mat4 sword_mat = build_sword_matrix(p.pos, out.sword_angle, sword_pitch, game.sword_scale);
+        out.sword_verts_world.reserve(game.sword_model.vertices.size());
+        for (const auto& v : game.sword_model.vertices) {
+            out.sword_verts_world.push_back(transform_point(sword_mat, v));
+        }
+        out.sword_tip_world = transform_point(sword_mat, game.sword_model.tip_vertex);
+        out.has_sword_model = true;
+    }
+
     // Update ribbons (persist in player)
-    float sword_angle = p.angle + g_sword.visual_offset;
     Vec2 sword_base = p.pos;
-    Vec2 sword_tip(p.pos.x + cosf(sword_angle) * SWORD_LENGTH,
-                   p.pos.y + sinf(sword_angle) * SWORD_LENGTH);
-    
+    Vec2 sword_tip(out.sword_tip_world.x, out.sword_tip_world.y);
+
     int segments;
     float ribbon_intensity;
     switch (phase) {
@@ -641,7 +714,7 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
         case EntityState::Slashing: segments = RIBBON_SEGMENTS_SLASH; ribbon_intensity = 1.0f; break;
         default: segments = RIBBON_SEGMENTS_IDLE; ribbon_intensity = 0.25f; break;
     }
-    
+
     for (int i = 0; i < segments; i++) {
         SwordRibbon r;
         r.base = sword_base;
@@ -651,21 +724,21 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
         r.intensity = ribbon_intensity;
         p.ribbons.push_back(r);
     }
-    
+
     for (auto& sr : p.ribbons) sr.lifetime -= dt;
     p.ribbons.erase(
         std::remove_if(p.ribbons.begin(), p.ribbons.end(),
             [](const SwordRibbon& r) { return r.lifetime <= 0; }),
         p.ribbons.end()
     );
-    
+
     out.ribbons = p.ribbons;
-    
+
     // UI with smooth animation
     ScoreData& s = game.score;
     s.display_points += (s.points - s.display_points) * dt * 8.0f;
     s.display_fill += (s.fill - s.display_fill) * dt * 6.0f;
-    
+
     if (s.level != s.display_level) {
         s.level_anim_timer += dt * 4.0f;
         if (s.level_anim_timer >= 1.0f) {
@@ -673,13 +746,13 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
             s.level_anim_timer = 0.0f;
         }
     }
-    
+
     out.score_fill = s.display_fill;
     out.score_level = s.display_level;
     out.score_feedback_timer = s.feedback_timer;
     out.score_feedback_good = s.last_hit_good;
     out.score_bar_bounce = s.bar_bounce;
-    
+
     // Find nearest enemy for UI indicator
     out.nearest_enemy_idx = -1;
     float min_dist = 999999.0f;
