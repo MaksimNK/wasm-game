@@ -68,13 +68,13 @@ static bool step() {
         g_game.music_time = g_time;
         g_game.game_time += dt;
         
-        Systems::update_combat(g_game, g_events, dt, g_timeline, g_time);
-        Systems::update_movement(g_game, dt);
+        Systems::update_player_flow(g_game, g_events, dt, g_timeline, g_time, gradient);
+        Systems::update_enemies(g_game, dt);
         Systems::update_spawn(g_game, dt, gradient);
         Systems::update_score(g_game, g_events, dt, gradient);
         Systems::build_visual_frame(g_game, dt, g_visual_frame);
         Systems::update_camera(g_game.camera, g_game.player.pos, 
-                                g_game.player.state != EntityState::Idle, dt);
+                                g_game.player.trajectory.active, dt);
         
         g_events.clear();
     }
