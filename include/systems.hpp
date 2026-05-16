@@ -14,8 +14,6 @@ struct VisualFrame {
 	float player_angle = 0;
 	float sword_angle = 0;
 	float sword_pitch = 0;
-	SwordState sword_state = SwordState::Idle;
-	float sword_state_progress = 0.0f;
 	
 	std::vector<SwordRibbon> ribbons;
 	Camera camera;

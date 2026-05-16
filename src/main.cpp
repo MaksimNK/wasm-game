@@ -8,7 +8,7 @@
 #include "render.hpp"
 
 static constexpr const char* APP_NAME = "Rhythm Slayer";
-static constexpr const char* DEFAULT_AUDIO_PATH = "audio/test-3.mp3";
+static constexpr const char* DEFAULT_AUDIO_PATH = "audio/test-4.mp3";
 static constexpr int AUDIO_SAMPLES = 4096;
 static constexpr SDL_AudioFormat AUDIO_FORMAT = AUDIO_F32SYS;
 static constexpr int AUDIO_CHANNELS = 2;

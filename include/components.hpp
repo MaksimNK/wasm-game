@@ -43,18 +43,13 @@ struct Trajectory {
 // SWORD
 // ============================================================================
 
-enum class SwordState { Idle, Windup, Slash, FollowThrough };
-
 struct Sword {
-	float offset_angle = 0.0f;
-	float visual_offset = 0.0f;
+	float angle = 0.0f;        // absolute world angle
+	float visual_angle = 0.0f; // smoothed for rendering
 	float pitch = 0.0f;
 	float visual_pitch = 0.0f;
+	float angular_vel = 0.0f;  // spin velocity during flight
 	
-	SwordState state = SwordState::Idle;
-	float state_progress = 0.0f;
-	
-	bool slash_from_left = true;
 	std::vector<SwordRibbon> ribbons;
 	
 	void reset();
@@ -71,7 +66,6 @@ struct Player {
 	
 	Trajectory trajectory;
 	bool is_gliding = false;
-	bool has_struck = false;
 	int target_enemy = -1;
 	
 	void reset();

@@ -12,8 +12,8 @@
 
 static constexpr float TIME_SCALE_MIN = 0.15f;
 static constexpr float TIME_SCALE_MAX = 1.0f;
-static constexpr float BASE_ENEMY_COUNT = 3.0f;
-static constexpr float ENEMY_COUNT_SCALE = 2.5f;
+static constexpr float BASE_ENEMY_COUNT = 5.0f;
+static constexpr float ENEMY_COUNT_SCALE = 3.0f;
 static constexpr float SPAWN_DIST_MIN = 900.0f;
 static constexpr float SPAWN_DIST_VAR = 300.0f;
 static constexpr float MIN_SPAWN_SPEED = 8.0f;
@@ -23,24 +23,23 @@ static constexpr float MAX_ENEMY_RADIUS = 24.0f;
 static constexpr float SPAWN_TIMER_MIN = 0.3f;
 static constexpr float SPAWN_TIMER_MAX = 0.8f;
 static constexpr float MIN_ATTACK_DIST = 40.0f;
-static constexpr float CURVE_AMOUNT = 480.0f;
-static constexpr float SWORD_LENGTH = 115.0f;
-static constexpr float SWORD_HIT_RANGE = 115.0f;
+static constexpr float SWORD_LENGTH = 150.0f;
+static constexpr float SWORD_HIT_RANGE = 150.0f;
 static constexpr float BLOW_RADIUS = 300.0f;
 static constexpr float BLOW_FORCE = 400.0f;
 static constexpr float BLOW_DURATION = 0.6f;
 static constexpr float FLASH_DURATION = 0.15f;
-static constexpr float ENEMY_SPEED = 320.0f;
-static constexpr float ENEMY_MAX_SPEED = 600.0f;
-static constexpr float ENEMY_FEAR_SPEED = 700.0f;
-static constexpr float GLIDE_FRICTION = 0.08f;
-static constexpr float GLIDE_MIN_SPEED = 20.0f;
-static constexpr float ZOOM_IDLE = 1.3f;
-static constexpr float ZOOM_JUMP = 1.05f;
+static constexpr float ENEMY_SPEED = 440.0f;
+static constexpr float ENEMY_MAX_SPEED = 700.0f;
+static constexpr float ENEMY_FEAR_SPEED = 1200.0f;
+static constexpr float GLIDE_FRICTION = 0.1f;
+static constexpr float GLIDE_MIN_SPEED = 33.0f;
+static constexpr float ZOOM_IDLE = 1.33f;
+static constexpr float ZOOM_JUMP = 1.00f;
 static constexpr float SCREEN_CENTER_X = 0.5f;
-static constexpr float SCREEN_CENTER_Y = 0.45f;
-static constexpr float TIMING_THRESHOLD = 0.55f;
-static constexpr float TIMING_WINDOW_SEC = 0.18f;
+static constexpr float SCREEN_CENTER_Y = 0.5f;
+static constexpr float TIMING_THRESHOLD = 0.33f;
+static constexpr float TIMING_WINDOW_SEC = 0.33f;
 static constexpr int BASE_HIT_POINTS = 100;
 static constexpr int KILL_POINTS = 50;
 static constexpr float FILL_PER_HIT = 0.15f;
@@ -49,34 +48,20 @@ static constexpr float LEVEL_MULTIPLIER = 0.1f;
 static constexpr int MAX_LEVEL = 7;
 
 // Flight speed: base + gradient scaling
-static constexpr float BASE_FLIGHT_SPEED = 1400.0f;
-static constexpr float SPEED_GRADIENT_SCALE = 1.5f;  // up to 1.5x at max gradient
+static constexpr float BASE_FLIGHT_SPEED = 1000.0f;
+static constexpr float SPEED_GRADIENT_SCALE = 2.7f;
 
 // Turn rate clamp (radians/sec)
 static constexpr float MAX_TURN_RATE = M_PI * 0.5f;
 
-// Sword phases as ratios of trajectory progress
-static constexpr float WINDUP_END = 0.3f;
-static constexpr float SLASH_END = 1.0f;
-
-// Sword animation
-static constexpr float SWORD_WINDUP_LEFT = M_PI * 0.92f;
-static constexpr float SWORD_WINDUP_RIGHT = -M_PI * 0.92f;
-static constexpr float SWORD_END_LEFT = M_PI * 0.75f;
-static constexpr float SWORD_END_RIGHT = -M_PI * 0.75f;
-static constexpr float SWORD_SLASH_SPEED = 38.0f;
-static constexpr float SWORD_CHARGE_SPEED = 28.0f;
-static constexpr float SWORD_IDLE_SPEED = 6.0f;
-static constexpr float ANGLE_ROTATION_SPEED = 12.0f;
+// Sword behavior
+static constexpr float SWORD_SLASH_BOOST = 77.0f;
+static constexpr float SWORD_ANGLE_SMOOTH = 15.0f;
 static constexpr float CAMERA_FOLLOW_SPEED = 8.0f;
 static constexpr float CAMERA_ZOOM_SPEED = 10.0f;
 
 // Ribbons
 static constexpr float RIBBON_LIFETIME = 1.0f;
-static constexpr int RIBBON_SEGMENTS_WINDUP = 3;
-static constexpr int RIBBON_SEGMENTS_SLASH = 8;
-static constexpr int RIBBON_SEGMENTS_FOLLOW = 2;
-static constexpr int RIBBON_SEGMENTS_IDLE = 1;
 
 // ============================================================================
 // HELPERS
@@ -207,7 +192,7 @@ void GameState::init() {
 		if (!sword_model.load_gltf("static/models/sword.gltf")) {
 			fprintf(stderr, "[WARN] Failed to load sword model\n");
 		} else {
-			sword_scale = 115.0f * sword_model.default_scale;
+			sword_scale = 150.0f * sword_model.default_scale;
 		}
 	}
 }
@@ -270,7 +255,7 @@ static void build_trajectory(Trajectory& traj, const Vec2& start, const Vec2& en
 	float dist = (enemy_pos - start).len();
 	
 	// Land BEHIND the enemy (fly past them)
-	float fly_past_dist = fminf(dist * 0.35f, 360.0f);
+	float fly_past_dist = fminf(dist * 0.33f, SWORD_LENGTH * 3);
 	Vec2 end = enemy_pos + dir * fly_past_dist;
 	
 	// C1 continuity: use current velocity direction as initial tangent
@@ -282,7 +267,8 @@ static void build_trajectory(Trajectory& traj, const Vec2& start, const Vec2& en
 	Vec2 perp(-tang.y, tang.x);
 	float curve_side = (randf() > 0.5f ? 1.0f : -1.0f);
 	traj.p0 = start;
-	traj.p1 = mid + perp * CURVE_AMOUNT * curve_side;
+	// traj.p1 = mid + perp * CURVE_AMOUNT * curve_side;
+	traj.p1 = mid + perp * curve_side;
 	traj.p2 = end;
 	
 	// Approximate curve length for speed-based progress
@@ -300,8 +286,7 @@ static void build_trajectory(Trajectory& traj, const Vec2& start, const Vec2& en
 static void check_sword_collision(GameState& game, Sword& sword, Player& player) {
 	if (game.sword_model.collision_poly.empty()) return;
 	
-	float sword_angle = player.angle + sword.offset_angle;
-	Mat4 sword_mat = build_sword_matrix(player.pos, sword_angle, sword.pitch, game.sword_scale);
+	Mat4 sword_mat = build_sword_matrix(player.pos, sword.angle, sword.pitch, game.sword_scale);
 	
 	Vec2 world_poly[4];
 	for (int i = 0; i < 4; i++) {
@@ -313,124 +298,27 @@ static void check_sword_collision(GameState& game, Sword& sword, Player& player)
 	for (size_t i = 0; i < game.enemies.size(); i++) {
 		auto& en = game.enemies[i];
 		if (!en.alive) continue;
-		float hit_dist = en.radius * 0.33f;
+		float hit_dist = en.radius;
 		if (circle_intersects_poly(en.pos, hit_dist, world_poly, 4)) {
-			// Strike landed
 			blow_away_enemies(game.enemies, en.pos);
 			en.alive = false;
 			en.flash_timer = FLASH_DURATION;
-			
-			if ((int)i == player.target_enemy) {
-				player.has_struck = true;
-				player.target_enemy = -1;
-			}
+			float sword_side = (randf() > 0.5f ? 1.0f : -1.0f);
+			sword.angular_vel = SWORD_SLASH_BOOST * sword_side;
 		}
 	}
 }
 
-static void update_sword_animation(Sword& s, float traj_progress, float dt) {
-	SwordState prev_state = s.state;
-	
-	// Determine phase from trajectory progress
-	if (traj_progress < WINDUP_END) {
-		s.state = SwordState::Windup;
-		s.state_progress = traj_progress / WINDUP_END;
-	} else if (traj_progress < SLASH_END) {
-		s.state = SwordState::Slash;
-		s.state_progress = (traj_progress - WINDUP_END) / (SLASH_END - WINDUP_END);
-	} else {
-		s.state = SwordState::FollowThrough;
-		s.state_progress = (traj_progress - SLASH_END) / (1.0f - SLASH_END);
-	}
-	
-	// On state entry, pick slash direction
-	if (prev_state != s.state && s.state == SwordState::Windup) {
-		s.slash_from_left = !s.slash_from_left;
-	}
-	
-	float windup = s.slash_from_left ? SWORD_WINDUP_LEFT : SWORD_WINDUP_RIGHT;
-	float end = s.slash_from_left ? SWORD_END_RIGHT : SWORD_END_LEFT;
-	
-	float target_offset;
-	float target_pitch;
-	
-	switch (s.state) {
-		case SwordState::Windup:
-			target_offset = windup * ease_out_cubic(s.state_progress);
-			target_pitch = -0.4f * (1.0f - s.state_progress);
-			break;
-		case SwordState::Slash:
-			target_offset = windup + (end - windup) * ease_out_cubic(s.state_progress);
-			target_pitch = -0.4f + 1.0f * ease_out_cubic(s.state_progress);
-			break;
-		case SwordState::FollowThrough:
-			target_offset = end + (windup * 0.3f - end) * s.state_progress;
-			target_pitch = 0.6f * (1.0f - s.state_progress);
-			break;
-		default:
-			target_offset = 0.0f;
-			target_pitch = 0.0f;
-			break;
-	}
-	
-	// Smooth interpolation
-	float diff = angle_diff(target_offset, s.visual_offset);
-	float speed = (s.state == SwordState::Slash) ? SWORD_SLASH_SPEED :
-				  (s.state == SwordState::Windup) ? SWORD_CHARGE_SPEED : SWORD_IDLE_SPEED;
-	s.visual_offset += diff * dt * speed;
-	
-	float pitch_diff = target_pitch - s.visual_pitch;
-	s.visual_pitch += pitch_diff * dt * speed;
-	
-	// Game logic uses exact values (for collision)
-	s.offset_angle = target_offset;
-	s.pitch = target_pitch;
-}
-
-static void update_sword_idle(Sword& s, float dt, float player_angle) {
-	s.state = SwordState::Idle;
-	s.state_progress = 0.0f;
-	
-	float target_offset = s.slash_from_left ? SWORD_END_RIGHT * 0.3f : SWORD_END_LEFT * 0.3f;
-	float diff = angle_diff(target_offset, s.visual_offset);
-	s.visual_offset += diff * dt * SWORD_IDLE_SPEED;
-	s.visual_pitch += (0.0f - s.visual_pitch) * dt * SWORD_IDLE_SPEED;
-	
-	s.offset_angle = s.visual_offset;
-	s.pitch = s.visual_pitch;
-}
-
 static void spawn_ribbons(Sword& s, const Vec2& base, const Vec2& tip, float dt) {
-	int segments;
-	float intensity;
-	switch (s.state) {
-		case SwordState::Windup:
-			segments = RIBBON_SEGMENTS_WINDUP;
-			intensity = 0.5f;
-			break;
-		case SwordState::Slash:
-			segments = RIBBON_SEGMENTS_SLASH;
-			intensity = 1.0f;
-			break;
-		case SwordState::FollowThrough:
-			segments = RIBBON_SEGMENTS_FOLLOW;
-			intensity = 0.7f;
-			break;
-		default:
-			segments = RIBBON_SEGMENTS_IDLE;
-			intensity = 0.25f;
-			break;
-	}
-	
-	for (int i = 0; i < segments; i++) {
-		SwordRibbon r;
-		r.base = base;
-		r.tip = tip;
-		r.lifetime = RIBBON_LIFETIME;
-		r.max_lifetime = RIBBON_LIFETIME;
-		r.intensity = intensity;
-		s.ribbons.push_back(r);
-	}
+	float intensity = dt * 33.0f + 0.33f;
+
+    SwordRibbon r;
+	r.base = base;
+	r.tip = tip;
+	r.lifetime = RIBBON_LIFETIME;
+	r.max_lifetime = RIBBON_LIFETIME;
+	r.intensity = intensity;
+	s.ribbons.push_back(r);
 	
 	for (auto& sr : s.ribbons) sr.lifetime -= dt;
 	s.ribbons.erase(
@@ -452,12 +340,6 @@ void Systems::update_player_flow(GameState& game, EventBus& events, float dt,
 		// Block: already flying
 		if (p.trajectory.active) continue;
 		
-		// Block: previous target still alive
-		if (p.target_enemy >= 0 && p.target_enemy < (int)game.enemies.size() &&
-			game.enemies[p.target_enemy].alive) {
-			continue;
-		}
-		
 		int target = find_nearest_enemy(p.pos, game.enemies);
 		if (target < 0) continue;
 		
@@ -467,13 +349,6 @@ void Systems::update_player_flow(GameState& game, EventBus& events, float dt,
 		build_trajectory(p.trajectory, p.pos, game.enemies[target].pos, p.vel, game.sword_scale);
 		p.trajectory.target_enemy = target;
 		p.target_enemy = target;
-		p.has_struck = false;
-		p.is_gliding = false;
-		
-		// Pick slash direction based on approach angle
-		Vec2 to_enemy = (game.enemies[target].pos - p.pos).normalized();
-		float approach_angle = atan2f(to_enemy.y, to_enemy.x);
-		s.slash_from_left = angle_diff(approach_angle, p.angle) > 0.0f;
 		
 		events.scores.push_back({good_timing, 1});
 	}
@@ -508,14 +383,6 @@ void Systems::update_player_flow(GameState& game, EventBus& events, float dt,
 				if (diff < -max_turn) diff = -max_turn;
 				p.angle += diff;
 			}
-			
-			// Update sword animation synced to trajectory
-			update_sword_animation(s, p.trajectory.progress, dt);
-			
-			// Check collision during slash phase
-			if (s.state == SwordState::Slash && !p.has_struck) {
-				check_sword_collision(game, s, p);
-			}
 		}
 	} else if (p.is_gliding) {
 		// Glide: maintain momentum with velocity-dependent friction
@@ -535,23 +402,19 @@ void Systems::update_player_flow(GameState& game, EventBus& events, float dt,
 			if (diff < -max_turn) diff = -max_turn;
 			p.angle += diff;
 		}
-		
-		// Stop gliding if too slow
-		if (p.vel.len() < GLIDE_MIN_SPEED) {
-			p.is_gliding = false;
-			p.vel = Vec2(0, 0);
-		}
-		
-		update_sword_idle(s, dt, p.angle);
-	} else {
-		// True idle (start of game, or fully stopped)
-		update_sword_idle(s, dt, p.angle);
 	}
 	
-	// --- Ribbons (always spawn based on sword state) ---
-	// Compute sword tip for ribbons
-	float sword_angle = p.angle + s.visual_offset;
-	Mat4 sword_mat = build_sword_matrix(p.pos, sword_angle, s.visual_pitch, game.sword_scale);
+	s.angle += s.angular_vel * dt;
+	s.angular_vel *= (1.0f - dt * 15.0f);
+	
+	check_sword_collision(game, s, p);
+	
+	// Smooth visual interpolation
+	float diff = angle_diff(s.angle, s.visual_angle);
+	s.visual_angle += diff * dt * SWORD_ANGLE_SMOOTH;
+	
+	// Ribbons
+	Mat4 sword_mat = build_sword_matrix(p.pos, s.visual_angle, s.visual_pitch, game.sword_scale);
 	Vec3 tip = transform_point(sword_mat, game.sword_model.tip_vertex);
 	spawn_ribbons(s, p.pos, Vec2(tip.x, tip.y), dt);
 	
@@ -762,10 +625,7 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
 	// Build frame from player + sword
 	out.player_pos = p.pos;
 	out.player_angle = p.angle;
-	out.sword_angle = p.angle + s.visual_offset;
-	out.sword_pitch = s.visual_pitch;
-	out.sword_state = s.state;
-	out.sword_state_progress = s.state_progress;
+	out.sword_angle = s.visual_angle;
 	out.camera = game.camera;
 	out.enemies.clear();
 

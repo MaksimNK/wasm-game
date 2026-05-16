@@ -6,18 +6,15 @@ void Player::reset() {
 	angle = M_PI * 0.25f;
 	trajectory.reset();
 	is_gliding = false;
-	has_struck = false;
 	target_enemy = -1;
 }
 
 void Sword::reset() {
-	offset_angle = 0.0f;
-	visual_offset = 0.0f;
+	angle = 0.0f;
+	visual_angle = 0.0f;
 	pitch = 0.0f;
 	visual_pitch = 0.0f;
-	state = SwordState::Idle;
-	state_progress = 0.0f;
-	slash_from_left = true;
+	angular_vel = 0.0f;
 	ribbons.clear();
 }
 
