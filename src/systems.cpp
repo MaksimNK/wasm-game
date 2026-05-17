@@ -52,11 +52,12 @@ static constexpr float BASE_FLIGHT_SPEED = 1000.0f;
 static constexpr float SPEED_GRADIENT_SCALE = 2.7f;
 
 // Turn rate clamp (radians/sec)
-static constexpr float MAX_TURN_RATE = M_PI * 0.5f;
+static constexpr float MAX_TURN_RATE = M_PI * 7.0f;
 
 // Sword behavior
 static constexpr float SWORD_SLASH_BOOST = 77.0f;
 static constexpr float SWORD_ANGLE_SMOOTH = 15.0f;
+static constexpr float LAGRANGE_STRENGTH = 500.0f;
 static constexpr float CAMERA_FOLLOW_SPEED = 8.0f;
 static constexpr float CAMERA_ZOOM_SPEED = 10.0f;
 
@@ -406,6 +407,14 @@ void Systems::update_player_flow(GameState& game, EventBus& events, float dt,
 	
 	s.angle += s.angular_vel * dt;
 	s.angular_vel *= (1.0f - dt * 15.0f);
+	
+	// Lagrange points: sword rests perpendicular to movement direction
+	float left_target = p.angle + M_PI * 0.5f;
+	float right_target = p.angle - M_PI * 0.5f;
+	float diff_left = angle_diff(left_target, s.angle);
+	float diff_right = angle_diff(right_target, s.angle);
+	float nearest_diff = (fabsf(diff_left) < fabsf(diff_right)) ? diff_left : diff_right;
+	s.angular_vel += nearest_diff * LAGRANGE_STRENGTH * dt;
 	
 	check_sword_collision(game, s, p);
 	
