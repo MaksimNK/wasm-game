@@ -37,6 +37,9 @@ struct VisualFrame {
 	std::vector<Vec3> sword_verts_world;
 	Vec3 sword_tip_world;
 	bool has_sword_model = false;
+
+	// Ripple VFX
+	std::vector<Ripple> ripples;
 };
 
 // ============================================================================
@@ -56,6 +59,7 @@ struct GameState {
 	float music_time = 0;
 	bool running = false;
 	float spawn_timer = 0;
+	std::vector<Ripple> ripples;
 
 	void init();
 };
@@ -76,6 +80,7 @@ namespace Systems {
 	
 	void update_spawn(GameState& game, float dt, float gradient);
 	void update_score(GameState& game, EventBus& events, float dt, float gradient);
+	void update_ripples(GameState& game, EventBus& events, float dt);
 	void build_visual_frame(GameState& game, float dt, VisualFrame& out);
 	void update_camera(Camera& camera, const Vec2& target_pos, bool player_jumping, float dt);
 }

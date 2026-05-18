@@ -10,6 +10,13 @@ struct SwordRibbon {
 	float intensity = 0;
 };
 
+struct Ripple {
+	Vec2 pos;
+	Vec2 dir;
+	float timer = 0.0f;
+	float max_timer = 0.4f;
+};
+
 // ============================================================================
 // TRAJECTORY
 // ============================================================================

@@ -3,4 +3,5 @@
 void EventBus::clear() {
     attacks.clear();
     scores.clear();
+    deaths.clear();
 }

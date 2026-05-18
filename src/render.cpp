@@ -51,6 +51,10 @@ static constexpr int SCORE_BAR_W = BAR_W / 2;
 // --- Window ---
 static constexpr Uint32 WINDOW_FLAGS = SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL;
 
+static constexpr int MAX_RIPPLES = 64;
+static constexpr float RIPPLE_DURATION = 0.7f;
+static constexpr float RIPPLE_STRENGTH = 21.0f;
+
 struct DrawCmd {
     GLenum mode;
     GLint offset;
@@ -67,6 +71,10 @@ struct Renderer {
     GLint brightness_loc = -1;
     GLint fisheye_loc = -1;
     GLint screen_center_loc = -1;
+    GLint ripple_count_loc = -1;
+    GLint ripple_data_loc[MAX_RIPPLES];
+    GLint ripple_time_loc[MAX_RIPPLES];
+    GLint ripple_strength_loc[MAX_RIPPLES];
     GLuint vbo = 0;
     std::vector<float> verts;
     std::vector<DrawCmd> cmds;
@@ -140,6 +148,16 @@ static bool init_gl(Renderer* r) {
     r->brightness_loc = glGetUniformLocation(r->program, "u_brightness");
     r->fisheye_loc = glGetUniformLocation(r->program, "u_fisheye");
     r->screen_center_loc = glGetUniformLocation(r->program, "u_screen_center");
+    r->ripple_count_loc = glGetUniformLocation(r->program, "u_ripple_count");
+    for (int i = 0; i < MAX_RIPPLES; i++) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "u_ripples[%d]", i);
+        r->ripple_data_loc[i] = glGetUniformLocation(r->program, buf);
+        snprintf(buf, sizeof(buf), "u_ripple_time[%d]", i);
+        r->ripple_time_loc[i] = glGetUniformLocation(r->program, buf);
+        snprintf(buf, sizeof(buf), "u_ripple_strength[%d]", i);
+        r->ripple_strength_loc[i] = glGetUniformLocation(r->program, buf);
+    }
     glGenBuffers(1, &r->vbo);
     return true;
 }
@@ -233,6 +251,27 @@ static void draw_sword_model(Renderer* r, const VisualFrame& frame, int screen_w
         push_line(r, s0.x, s0.y, s1.x, s1.y, R, G, B, A);
         push_line(r, s1.x, s1.y, s2.x, s2.y, R, G, B, A);
         push_line(r, s2.x, s2.y, s0.x, s0.y, R, G, B, A);
+    }
+}
+
+static void draw_grid(Renderer* r, const Camera& camera, int screen_w, int screen_h) {
+    float spacing = 100.0f;
+    float alpha = 0.07f;
+    float left = camera.pos.x - screen_w;
+    float right = camera.pos.x + screen_w;
+    float top = camera.pos.y - screen_h;
+    float bottom = camera.pos.y + screen_h;
+    float start_x = floorf(left / spacing) * spacing;
+    float start_y = floorf(top / spacing) * spacing;
+    for (float x = start_x; x <= right; x += spacing) {
+        Vec2 s1 = world_to_screen(Vec2(x, top), camera, screen_w, screen_h);
+        Vec2 s2 = world_to_screen(Vec2(x, bottom), camera, screen_w, screen_h);
+        push_line(r, s1.x, s1.y, s2.x, s2.y, 1.0f, 1.0f, 1.0f, alpha);
+    }
+    for (float y = start_y; y <= bottom; y += spacing) {
+        Vec2 s1 = world_to_screen(Vec2(left, y), camera, screen_w, screen_h);
+        Vec2 s2 = world_to_screen(Vec2(right, y), camera, screen_w, screen_h);
+        push_line(r, s1.x, s1.y, s2.x, s2.y, 1.0f, 1.0f, 1.0f, alpha);
     }
 }
 
@@ -412,6 +451,20 @@ void render_frame(Renderer* r, const VisualFrame& frame, const Timeline& timelin
     glUniform1f(r->fisheye_loc, fisheye);
     glUniform2f(r->screen_center_loc, w * 0.5f, h * 0.5f);
     
+    // Upload ripple VFX data
+    int ripple_count = (int)frame.ripples.size();
+    if (ripple_count > MAX_RIPPLES) ripple_count = MAX_RIPPLES;
+    glUniform1i(r->ripple_count_loc, ripple_count);
+    for (int i = 0; i < ripple_count; i++) {
+        const Ripple& rip = frame.ripples[i];
+        Vec2 screen_pos = world_to_screen(rip.pos, frame.camera, w, h);
+        Vec2 screen_dir = rip.dir * frame.camera.zoom;
+        glUniform4f(r->ripple_data_loc[i], screen_pos.x, screen_pos.y, screen_dir.x, screen_dir.y);
+        glUniform1f(r->ripple_time_loc[i], rip.timer);
+        float strength = RIPPLE_STRENGTH * (1.0f - rip.timer / RIPPLE_DURATION);
+        glUniform1f(r->ripple_strength_loc[i], strength);
+    }
+    
     r->verts.clear();
     r->cmds.clear();
     
@@ -419,6 +472,9 @@ void render_frame(Renderer* r, const VisualFrame& frame, const Timeline& timelin
     get_score_rank_color(frame.score_level, sword_r, sword_g, sword_b);
     
     if (running) {
+        // Background grid
+        draw_grid(r, frame.camera, w, h);
+        
         // Ribbons (additive blending to fix overlap artifacts)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
         for (size_t i = 1; i < frame.ribbons.size(); i++) {

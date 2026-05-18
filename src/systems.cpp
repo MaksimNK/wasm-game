@@ -64,6 +64,9 @@ static constexpr float CAMERA_ZOOM_SPEED = 10.0f;
 // Ribbons
 static constexpr float RIBBON_LIFETIME = 1.0f;
 
+// Ripple VFX constants
+static constexpr float RIPPLE_DURATION = 0.4f;
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -284,7 +287,7 @@ static void build_trajectory(Trajectory& traj, const Vec2& start, const Vec2& en
 	if (traj.length < 1.0f) traj.length = 1.0f;
 }
 
-static void check_sword_collision(GameState& game, Sword& sword, Player& player) {
+static void check_sword_collision(GameState& game, Sword& sword, Player& player, EventBus& events) {
 	if (game.sword_model.collision_poly.empty()) return;
 	
 	Mat4 sword_mat = build_sword_matrix(player.pos, sword.angle, sword.pitch, game.sword_scale);
@@ -306,6 +309,11 @@ static void check_sword_collision(GameState& game, Sword& sword, Player& player)
 			en.flash_timer = FLASH_DURATION;
 			float sword_side = (randf() > 0.5f ? 1.0f : -1.0f);
 			sword.angular_vel = SWORD_SLASH_BOOST * sword_side;
+			
+			EventBus::EnemyDeathEvent death_evt;
+			death_evt.pos = en.pos;
+			death_evt.hit_dir = (en.pos - player.pos).normalized();
+			events.deaths.push_back(death_evt);
 		}
 	}
 }
@@ -416,7 +424,7 @@ void Systems::update_player_flow(GameState& game, EventBus& events, float dt,
 	float nearest_diff = (fabsf(diff_left) < fabsf(diff_right)) ? diff_left : diff_right;
 	s.angular_vel += nearest_diff * LAGRANGE_STRENGTH * dt;
 	
-	check_sword_collision(game, s, p);
+	check_sword_collision(game, s, p, events);
 	
 	// Smooth visual interpolation
 	float diff = angle_diff(s.angle, s.visual_angle);
@@ -624,6 +632,31 @@ void Systems::update_score(GameState& game, EventBus& events, float dt, float gr
 }
 
 // ============================================================================
+// RIPPLE VFX
+// ============================================================================
+
+void Systems::update_ripples(GameState& game, EventBus& events, float dt) {
+	for (const auto& evt : events.deaths) {
+		Ripple r;
+		r.pos = evt.pos;
+		r.dir = evt.hit_dir.normalized();
+		r.timer = 0.0f;
+		r.max_timer = RIPPLE_DURATION;
+		game.ripples.push_back(r);
+	}
+	
+	for (auto& r : game.ripples) {
+		r.timer += dt;
+	}
+	
+	game.ripples.erase(
+		std::remove_if(game.ripples.begin(), game.ripples.end(),
+			[](const Ripple& r) { return r.timer >= r.max_timer; }),
+		game.ripples.end()
+	);
+}
+
+// ============================================================================
 // ANIMATION / VISUAL FRAME
 // ============================================================================
 
@@ -668,6 +701,9 @@ void Systems::build_visual_frame(GameState& game, float dt, VisualFrame& out) {
 
 	// Ribbons from sword
 	out.ribbons = s.ribbons;
+
+	// Ripple VFX
+	out.ripples = game.ripples;
 
 	// UI with smooth animation
 	ScoreData& sc = game.score;
